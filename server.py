@@ -1,16 +1,18 @@
+import os
 from flask import Flask, request, jsonify
-from asterisk.ami import AMIClient
+from asterisk_ami import AMIClient
 
 app = Flask(__name__)
 
-# Настройка Asterisk AMI клиента
-client = AMIClient(address='127.0.0.1', port=5038)
-# client.login(username='myuser', secret='mypassword')
+# Получаем настройки из переменных окружения
+AST_SERVER = os.getenv('AST_SERVER', '127.0.0.1')    # По умолчанию 127.0.0.1
+AST_PORT = int(os.getenv('AST_PORT', 5038))          # По умолчанию 5038
+AST_USER = os.getenv('AST_USER', 'myuser')
+AST_SECRET = os.getenv('AST_SECRET', 'mypassword')
 
-@app.route('/', methods=['POST','GET'])
-def default_func():
-    return jsonify({"response":"OK"})
-
+# Настройка Asterisk AMI клиента с использованием переменных окружения
+client = AMIClient(address=AST_SERVER, port=AST_PORT)
+client.login(username=AST_USER, secret=AST_SECRET)
 
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
@@ -54,4 +56,4 @@ def attended_transfer():
     })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000,debug=True)
+    app.run(host='0.0.0.0', port=5000)
