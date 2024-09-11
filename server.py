@@ -13,7 +13,9 @@ AST_SECRET = os.getenv('AST_SECRET', 'mypassword')
 # Настройка Asterisk AMI клиента с использованием переменных окружения
 client = AMIClient(address=AST_SERVER, port=AST_PORT)
 client.login(username=AST_USER, secret=AST_SECRET)
-
+@app.route('/', methods=['POST','GET'])
+def default():
+    return jsonify({"response":"OK"})
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
     data = request.json
