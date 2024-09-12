@@ -17,7 +17,7 @@ try:
 except:
     ex_message = "Failed to connect to Asterisk server"
 def check_ping():
-    hostname = "host.docker.internal"
+    hostname = "172.17.0.1"
     response = os.system("ping -c 1 " + hostname)
     # and then check the response...
     if response == 0:

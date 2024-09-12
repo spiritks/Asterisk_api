@@ -6,8 +6,8 @@ services:
       - "666:5000"
     volumes:
       - .:/app
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
     ulimits:
       nproc: 65535  # Увеличиваем лимит потоков (например, до 65535)
       nofile:
