@@ -1,7 +1,7 @@
 import os
 from flask import Flask, request, jsonify
 from asterisk.ami import AMIClient
-
+import socket
 app = Flask(__name__)
 
 # Получаем настройки из переменных окружения
@@ -14,22 +14,33 @@ AST_SECRET = os.getenv('AST_SECRET', 'mypassword')
 client = AMIClient(address=AST_SERVER, port=AST_PORT)
 try:
     client.login(username=AST_USER, secret=AST_SECRET)
-except:
-    ex_message = "Failed to connect to Asterisk server"
-def check_ping():
-    hostname = "172.18.0.1"
-    response = os.system("ping -c 1 " + hostname)
-    # and then check the response...
-    if response == 0:
-        pingstatus = "Network Active"
-    else:
-        pingstatus = "Network Error"
-    return pingstatus
+except Exception as e:
+    ex_message = f"Failed to connect to Asterisk server error: {e}"
+def is_port_open(host, port):
+    """
+    Проверяет, открыт ли порт на указанном хосте.
+    Возвращает True, если порт открыт, иначе False.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1)  # Устанавливаем таймаут в 1 секунду для проверки
+    try:
+        # Пытаемся подключиться к серверу на указанный порт
+        sock.connect((host, port))
+    except socket.error:
+        return False
+    finally:
+        sock.close()
+    return True
+
+    
 @app.route('/', methods=['POST','GET'])
 def default_func():
     global ex_message
     resp=[]
-    resp.append(check_ping())
+    if is_port_open(AST_SERVER,AST_PORT):
+        resp.append("Asterisk port is open")
+    else:
+        resp.append("Asterisk port is closed")
     if "ex_message" in globals():
         resp.append({'error':ex_message})
     else:
