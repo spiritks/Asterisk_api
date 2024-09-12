@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Открываем порт, который используется Flask
-EXPOSE 5000
+EXPOSE 666
 
 # Запускаем приложение через gunicorn с количеством рабочих процессов (например, 4)
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "server:app"]
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:666", "server:app"]
