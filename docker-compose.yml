@@ -3,7 +3,7 @@ services:
   asterisk-api:
     build: .
     ports:
-      - "5000:5000"
+      - "666:5000"
     volumes:
       - .:/app
     extra_hosts:
