@@ -1,6 +1,6 @@
 import os
 from flask import Flask, request, jsonify
-from asterisk_ami import AMIClient
+from asterisk.ami import AMIClient
 
 app = Flask(__name__)
 
@@ -12,10 +12,29 @@ AST_SECRET = os.getenv('AST_SECRET', 'mypassword')
 
 # Настройка Asterisk AMI клиента с использованием переменных окружения
 client = AMIClient(address=AST_SERVER, port=AST_PORT)
-client.login(username=AST_USER, secret=AST_SECRET)
+try:
+    client.login(username=AST_USER, secret=AST_SECRET)
+except:
+    ex_message = "Failed to connect to Asterisk server"
+def check_ping():
+    hostname = "host.docker.internal"
+    response = os.system("ping -c 1 " + hostname)
+    # and then check the response...
+    if response == 0:
+        pingstatus = "Network Active"
+    else:
+        pingstatus = "Network Error"
+    return pingstatus
 @app.route('/', methods=['POST','GET'])
-def default():
-    return jsonify({"response":"OK"})
+def default_func():
+    global ex_message
+    resp=[]
+    resp.append(check_ping())
+    if "ex_message" in globals():
+        resp.append({'error':ex_message})
+    else:
+        resp.append({"Responce":"Api works"})
+    return jsonify(resp)
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
     data = request.json
@@ -49,7 +68,8 @@ def attended_transfer():
     })
 
     if redirect_response.get('response') != 'Success':
-        return jsonify({"error": "Failed to initiate attended transfer"}), 500
+        return jsonify({"error": "Failed to initiate attended transfer",
+                        "response":redirect_response}), 500
 
     return jsonify({
         "success": True,

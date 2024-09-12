@@ -1,2 +1,3 @@
 flask
 asterisk-ami
+python-dotenv

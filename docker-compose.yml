@@ -6,7 +6,5 @@ services:
       - "5000:5000"
     volumes:
       - .:/app
-    network_mode: host
-      
-    environment:
-      - FLASK_ENV=development
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
