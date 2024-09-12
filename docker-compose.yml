@@ -8,3 +8,8 @@ services:
       - .:/app
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    ulimits:
+      nproc: 65535  # Увеличиваем лимит потоков (например, до 65535)
+      nofile:
+        soft: 20000 # Увеличиваем лимит открытых файловых дескрипторов
+        hard: 40000
