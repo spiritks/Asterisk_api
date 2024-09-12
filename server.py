@@ -12,10 +12,11 @@ AST_SECRET = os.getenv('AST_SECRET', 'mypassword')
 
 # Настройка Asterisk AMI клиента с использованием переменных окружения
 client = AMIClient(address=AST_SERVER, port=AST_PORT)
-try:
-    client.login(username=AST_USER, secret=AST_SECRET)
-except Exception as e:
-    ex_message = f"Failed to connect to Asterisk server error: {e}"
+# try:
+#     client.login(username=AST_USER, secret=AST_SECRET)
+# except Exception as e:
+#     ex_message = f"Failed to connect to Asterisk server error: {e}"
+client.login(username=AST_USER, secret=AST_SECRET)
 def is_port_open(host, port):
     """
     Проверяет, открыт ли порт на указанном хосте.
