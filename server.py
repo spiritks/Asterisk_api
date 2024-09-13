@@ -1,58 +1,14 @@
-import os
 from flask import Flask, request, jsonify
-from asterisk.ami import AMIClient
-import socket
-import traceback
+from asterisk.ami import AMIClient, SimpleAction, EventListener
+
 app = Flask(__name__)
 
-# Получаем настройки из переменных окружения
-AST_SERVER = os.getenv('AST_SERVER', '127.0.0.1')    # По умолчанию 127.0.0.1
-AST_PORT = int(os.getenv('AST_PORT', 5038))          # По умолчанию 5038
-AST_USER = os.getenv('AST_USER', 'myuser')
-AST_SECRET = os.getenv('AST_SECRET', 'mypassword')
+# Настройка Asterisk AMI клиента
+client = AMIClient(address='127.0.0.1', port=5038)
+client.login(username='myuser', secret='mypassword')
 
-# Настройка Asterisk AMI клиента с использованием переменных окружения
-client = AMIClient(address=AST_SERVER, port=AST_PORT)
-try:
-    client.login(username=AST_USER, secret=AST_SECRET)
-except Exception as e:
-    tb = traceback.format_exc()
-    ex_message = f"Failed to connect to Asterisk server {AST_SERVER}:{AST_PORT}@{AST_USER}:{AST_SECRET} error: {tb}"
-# client.login(username=AST_USER, secret=AST_SECRET)
-def is_port_open(host, port):
-    """
-    Проверяет, открыт ли порт на указанном хосте.
-    Возвращает True, если порт открыт, иначе False.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(1)  # Устанавливаем таймаут в 1 секунду для проверки
-    try:
-        # Пытаемся подключиться к серверу на указанный порт
-        sock.connect((host, port))
-    except socket.error:
-        return False
-    finally:
-        sock.close()
-    return True
-
-    
-@app.route('/', methods=['POST','GET'])
-def default_func():
-    global ex_message
-    resp=[]
-    if is_port_open(AST_SERVER,AST_PORT):
-        resp.append("Asterisk port is open")
-    else:
-        resp.append("Asterisk port is closed")
-    if "ex_message" in globals():
-        resp.append({'error':ex_message})
-    else:
-        resp.append({"Responce":"Api works"})
-    return jsonify(resp)
-@app.route('/api/attended_transfer', methods=['POST','GET'])
+@app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
-    if request.method=="GET":
-        return "Api works but you need to use POST method"
     data = request.json
 
     internal_number = data.get('internal_number')
@@ -62,35 +18,40 @@ def attended_transfer():
         return jsonify({"error": "Missing required parameters"}), 400
 
     # Шаг 1. Найдем активный канал по внутреннему номеру
-    status_response = client.send_action({
-        'action': 'Status'
-    })
-    return jsonify(status_response)
-    channels = [channel['Channel'] for channel in status_response.get('response') if internal_number in channel.get('CallerIDNum', '')]
+    action_status = SimpleAction(
+        'Status',
+    )
+    response = client.send_action(action_status)
+
+    channels = [channel.get_header('Channel') for channel in response.response if internal_number in channel.get_header('Channel')]
 
     if not channels:
         return jsonify({"error": "No active call found for this internal number"}), 404
-
-    # Взять первый активный канал (это канал звонка для данного абонента)
+    
+    # Взять первый активный канал (если их несколько, можно выбрать логику для правильного выбора)
     active_channel = channels[0]
 
-    # Шаг 2. Выполним Redirect (Dial для нового номера на активном канале)
-    redirect_response = client.send_action({
-        'action': 'Redirect',
-        'Channel': active_channel,
-        'Exten': transfer_to_number,
-        'Context': 'from-internal',
-        'Priority': 1
-    })
+    # Шаг 2. Выполним Dial для нового номера
+    action_originate = SimpleAction(
+        'Originate',
+        Channel=active_channel,
+        Exten=transfer_to_number,
+        Context='from-internal',
+        Priority=1,
+        CallerID=internal_number,
+        Timeout=30000,  # timeout in milliseconds
+        ActionID="AttendedTransfer"
+    )
 
-    if redirect_response.get('response') != 'Success':
-        return jsonify({"error": "Failed to initiate attended transfer",
-                        "response":redirect_response}), 500
+    originate_response = client.send_action(action_originate)
+
+    if originate_response.response.is_error():
+        return jsonify({"error": "Failed to initiate call to transfer number"}), 500
 
     return jsonify({
         "success": True,
         "message": f"Attended transfer initiated from {internal_number} to {transfer_to_number}",
-        "details": redirect_response
+        "details": originate_response.response.to_dict()
     })
 
 if __name__ == '__main__':
