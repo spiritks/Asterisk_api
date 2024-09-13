@@ -22,7 +22,7 @@ client = AMIClient(address='127.0.0.1', port=5038)
 client.login(username='myuser', secret='mypassword')
 setivents = SimpleAction('Events',EventMask= 'status,call')
 resp = client.send_action(setivents)
-logger.debug(f"Set events on {resp.status}")
+logger.debug(f"Set events on {resp.response.status}")
 active_channels = []
 
 # Функция запуска потока для непрерывного прослушивания событий AMI
