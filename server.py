@@ -17,7 +17,7 @@ try:
     client.login(username=AST_USER, secret=AST_SECRET)
 except Exception as e:
     tb = traceback.format_exc()
-    ex_message = f"Failed to connect to Asterisk server error: {tb}"
+    ex_message = f"Failed to connect to Asterisk server {AST_SERVER}:{AST_PORT}@{AST_USER}:{AST_SECRET} error: {tb}"
 # client.login(username=AST_USER, secret=AST_SECRET)
 def is_port_open(host, port):
     """
