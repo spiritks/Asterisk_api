@@ -15,7 +15,7 @@ def status_event_handler(event, **kwargs):
     global active_channels
 
     # Filter for 'Status' events and extract the relevant information
-    if event.name == 'Status':
+    if event.name:
         channel = event.get_header('Channel')
         caller_id_num = event.get_header('CallerIDNum')
         context = event.get_header('Context')
