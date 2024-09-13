@@ -22,10 +22,10 @@ def attended_transfer():
         'Status',
     )
     response = client.send_action(action_status).response
-    
+    client.wait_for_response(timeout=3)
     # if  response.response:
     #     return str(type(response.response))
-    channels = [channel.get_header('Channel') for channel in response if internal_number in channel.get_header('Channel')]
+    channels = [channel.get_header('Channel') for channel in response.response if internal_number in channel.get_header('Channel')]
 
     if not channels:
         return jsonify({"error": "No active call found for this internal number"}), 404
