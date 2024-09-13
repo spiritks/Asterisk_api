@@ -4,7 +4,7 @@ from asterisk.ami import AMIClient, SimpleAction, EventListener
 app = Flask(__name__)
 
 # Настройка Asterisk AMI клиента
-client = AMIClient(address='127.0.0.1', port=5038)
+client = AMIClient(address='127.0.0.1', port=5038,timeout=None)
 client.login(username='myuser', secret='mypassword')
 
 @app.route('/api/attended_transfer', methods=['POST'])
