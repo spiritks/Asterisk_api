@@ -30,7 +30,7 @@ logger.addHandler(console_handler)
 
 # Список активных каналов
 active_channels = []
-
+logger.debug("Starting Flask app...")
 # Настройка Asterisk AMI клиента
 client = AMIClient(address='127.0.0.1', port=5038)
 client.login(username='myuser', secret='mypassword')
