@@ -21,7 +21,7 @@ def attended_transfer():
     action_status = SimpleAction(
         'Status',
     )
-    response = client.send_action(action_status)
+    response = client.send_action(action_status).response
     channels=[]
     for key in response.keys():
         if key.startswith("Channel"):
