@@ -49,8 +49,10 @@ def default_func():
     else:
         resp.append({"Responce":"Api works"})
     return jsonify(resp)
-@app.route('/api/attended_transfer', methods=['POST'])
+@app.route('/api/attended_transfer', methods=['POST','GET'])
 def attended_transfer():
+    if request.method=="GET":
+        return "Api works but you need to use POST method"
     data = request.json
 
     internal_number = data.get('internal_number')
@@ -63,7 +65,7 @@ def attended_transfer():
     status_response = client.send_action({
         'action': 'Status'
     })
-
+    return jsonify(status_response)
     channels = [channel['Channel'] for channel in status_response.get('response') if internal_number in channel.get('CallerIDNum', '')]
 
     if not channels:
