@@ -1,37 +1,62 @@
+import time
+import logging
 from flask import Flask, request, jsonify
 from asterisk.ami import AMIClient, SimpleAction, EventListener
-import time
 
+# Инициализация Flask приложения
 app = Flask(__name__)
 
-# Asterisk AMI Client configuration
-client = AMIClient(address='127.0.0.1', port=5038)
-client.login(username='myuser', secret='mypassword')
-print("App started")
+# Настройка логирования
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Уровень логирования (DEBUG для максимальной детализации)
+
+# Логирование в файл
+file_handler = logging.FileHandler('app.log')
+file_handler.setLevel(logging.DEBUG)
+
+# Логирование в консоль
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+
+# Формат сообщений
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+file_handler.setFormatter(formatter)
+console_handler.setFormatter(formatter)
+
+# Добавляем хендлеры к логгеру
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# Список активных каналов
 active_channels = []
 
-# Logs all events, focusing on Status events
+# Настройка Asterisk AMI клиента
+client = AMIClient(address='127.0.0.1', port=5038)
+client.login(username='myuser', secret='mypassword')
+
+# Функция обработки событий 'Status'
 def status_event_handler(event, **kwargs):
     global active_channels
 
-    # Print the event to see what's received
-    print(f"Event: {event.name}")
+    # Логирование всех полученных событий
+    logger.debug(f"Event received: {event.name}")
 
-    # We're specifically looking for 'Status' events
     if event.name == 'Status':
-        print(f"Received Status Event: {event}")  # Debugging: Print entire event for inspection
+        # Логируем детали события 'Status'
+        logger.debug(f"Details of Status event: {event}")
 
-        # Extract details from the Status event
+        # Извлечение данных статуса
         channel = event.get_header('Channel')
         caller_id_num = event.get_header('CallerIDNum')
         context = event.get_header('Context')
         extension = event.get_header('Extension')
         state = event.get_header('ChannelStateDesc')
 
-        # Print the channel details for debugging
-        print(f"Channel: {channel}, CallerIDNum: {caller_id_num}, Context: {context}, Extension: {extension}, State: {state}")
+        # Логируем данные канала
+        logger.info(f"Processing Channel: {channel}, CallerIDNum: {caller_id_num}, Context: {context}, Extension: {extension}, State: {state}")
 
-        # Append channel info to active_channels if it's valid
+        # Добавляем канал в active_channels
         active_channels.append({
             "channel": channel,
             "caller_id_num": caller_id_num,
@@ -40,62 +65,70 @@ def status_event_handler(event, **kwargs):
             "state": state
         })
 
-# Add event listener to capture AMI Status events
+# Забираем события в AMI
 client.add_event_listener(EventListener(status_event_handler))
 
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
     global active_channels
-    active_channels = []  # Reset active channels list for new requests
+    active_channels = []  # Очищаем список активных каналов перед новым запросом
     
     data = request.json
     internal_number = data.get('internal_number')
     transfer_to_number = data.get('transfer_to_number')
 
     if not internal_number or not transfer_to_number:
+        logger.error(f"Missing parameters: internal_number or transfer_to_number is not provided.")
         return jsonify({"error": "Missing required parameters"}), 400
 
-    # Step 1: Send Status request to find the active channel
+    # Шаг 1. Отправляем запрос Action 'Status'
     action_status = SimpleAction('Status')
+    logger.info("Sending AMI Status Action to Asterisk")
     response = client.send_action(action_status)
 
-    # Manually sleep to allow time for Status events to be processed
-    time.sleep(5)  # Increase sleep time for debugging, should be dynamic
+    # Ждем время для обработки ивентов
+    logger.info("Waiting for events to be handled...")
+    time.sleep(5)  # Время ожидания событий для демонстрации
 
-    # Debugging print to see all captured channels
-    print(f"Active channels after timeout: {active_channels}")
+    # Отладочный вывод активных каналов
+    logger.debug(f"Active channels collected: {active_channels}")
 
-    # Filter based on internal number
+    # Поиск активных каналов по внутреннему номеру
     filtered_channels = [ch for ch in active_channels if internal_number in ch['caller_id_num']]
 
     if not filtered_channels:
+        logger.warning(f"No active call found for internal_number {internal_number}")
         return jsonify({
             "error": "No active call found for this internal number",
-            "active_channels": active_channels  # Return active channels for debugging purposes
+            "active_channels": active_channels  # Это для отладки, можно убрать в финальной версии
         }), 404
-    
-    # Get the first channel from the filtered list
+
+    # Берем первый подходящий канал
     active_channel = filtered_channels[0]
     channel_name = active_channel['channel']
 
-    # Step 2: Originate a new call (attended transfer)
+    # Шаг 2. Осуществляем трансфер с помощью вызова Originate
+    logger.info(f"Initiating attended transfer from {internal_number} to {transfer_to_number}")
     action_originate = SimpleAction(
         'Originate',
-        Channel=channel_name,            # Use the found active channel
+        Channel=channel_name,            
         Exten=transfer_to_number,
         Context='from-internal',
         Priority=1,
         CallerID=internal_number,
-        Timeout=30000,  # 30 seconds timeout
+        Timeout=30000,  # 30 секунд
         ActionID="AttendedTransfer"
     )
 
     originate_response = client.send_action(action_originate)
 
+    # Проверка на ошибку в ответе originate
     if originate_response.is_error():
+        logger.error(f"Error originating call from {internal_number} to {transfer_to_number}")
         return jsonify({"error": "Failed to initiate call to transfer number"}), 500
 
-    # Success response
+    # В случае успеха
+    logger.info(f"Attended transfer initiated from {internal_number} to {transfer_to_number} successfully")
     return jsonify({
         "success": True,
         "message": f"Attended transfer initiated from {internal_number} to {transfer_to_number}",
@@ -103,4 +136,5 @@ def attended_transfer():
     })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    logger.info("Starting Flask app...")
+    app.run(host='0.0.0.0', port=5000, debug=False)
