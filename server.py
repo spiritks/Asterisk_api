@@ -21,8 +21,8 @@ def attended_transfer():
     action_status = SimpleAction(
         'Status',
     )
-    response = vars(client.send_action(action_status).response)
-    return jsonify(response)
+    response = client.send_action(action_status).response
+    
     # if  response.response:
     #     return str(type(response.response))
     channels = [channel.get_header('Channel') for channel in response if internal_number in channel.get_header('Channel')]
@@ -55,6 +55,21 @@ def attended_transfer():
         "message": f"Attended transfer initiated from {internal_number} to {transfer_to_number}",
         "details": originate_response.response.to_dict()
     })
+@app.route('/api/debug_status', methods=['GET'])
+def debug_status():
+    # Send the 'Status' action request to Asterisk AMI
+    action_status = SimpleAction('Status')
+    response = client.send_action(action_status)
+
+    # Convert the response to a dictionary (for JSON conversion)
+    try:
+        response_dict = response.response.to_dict()  # Make sure the response can be converted to a dict
+    except AttributeError:
+        # If an error occurs (e.g., no to_dict method), handle it gracefully and inspect manually
+        response_dict = {"error": "Unable to convert response to dictionary format"}
+
+    # Return the response as JSON (for debugging purposes)
+    return jsonify(response_dict)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
