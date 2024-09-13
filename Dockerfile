@@ -9,7 +9,7 @@ COPY requirements.txt .
 
 # Устанавливаем необходимые библиотеки (Flask, pyst2 и другие)
 RUN apt-get update -y
-RUN apt-get install -y iputils-ping wget
+RUN apt-get install -y iputils-ping wget telnet
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем все файлы приложения в контейнер
