@@ -57,7 +57,7 @@ def attended_transfer():
     filtered_channels = [ch for ch in active_channels if internal_number in ch['caller_id_num']]
 
     if not filtered_channels:
-        return jsonify({"error": "No active call found for this internal number"}), 404
+        return jsonify({"error": "No active call found for this internal number","active_channels": active_channels}), 404
     
     # Get the first match
     active_channel = filtered_channels[0]
