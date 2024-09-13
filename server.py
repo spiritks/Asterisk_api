@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from asterisk.ami import AMIClient, SimpleAction, EventListener
-
+import time
 app = Flask(__name__)
 
 # Настройка Asterisk AMI клиента
@@ -22,7 +22,7 @@ def attended_transfer():
         'Status',
     )
     response = client.send_action(action_status).response
-    client.wait_for_response(timeout=3)
+    time.sleep(3)
     # if  response.response:
     #     return str(type(response.response))
     channels = [channel.get_header('Channel') for channel in response.response if internal_number in channel.get_header('Channel')]
