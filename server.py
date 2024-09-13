@@ -23,7 +23,7 @@ def attended_transfer():
     )
     response = client.send_action(action_status)
     if  response.response:
-        return response
+        return type(response.response)
     channels = [channel.get_header('Channel') for channel in response.response if internal_number in channel.get_header('Channel')]
 
     if not channels:
