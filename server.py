@@ -21,7 +21,7 @@ def attended_transfer():
     action_status = SimpleAction(
         'Status',
     )
-    response = vars(client.send_action(action_status).response)
+    response = vars(client.send_action(action_status))
     return jsonify(response)
     # if  response.response:
     #     return str(type(response.response))
