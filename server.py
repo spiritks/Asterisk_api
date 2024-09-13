@@ -4,7 +4,7 @@ from asterisk.ami import AMIClient, SimpleAction, EventListener
 app = Flask(__name__)
 
 # Настройка Asterisk AMI клиента
-client = AMIClient(address='127.0.0.1', port=5038,timeout=None)
+client = AMIClient(address='127.0.0.1', port=5038)
 client.login(username='myuser', secret='mypassword')
 
 @app.route('/api/attended_transfer', methods=['POST'])
@@ -22,18 +22,9 @@ def attended_transfer():
         'Status',
     )
     response = client.send_action(action_status).response
-    if not response:
-        return "No response received"
-    channels=[]
-    for key in response.keys():
-        if key.startswith("Channel"):
-            channel_info = response.get(key)
-            channel_name = channel_info.get_header("Channel")
-            if internal_number in channel_name:
-                channels.append(channel_name)
-
-    if not channels:
-        return jsonify({"error": "No active call found for this internal number"}), 404
+    # if  response.response:
+    #     return str(type(response.response))
+    channels = [channel.get_header('Channel') for channel in response if internal_number in channel.get_header('Channel')]
 
     if not channels:
         return jsonify({"error": "No active call found for this internal number"}), 404
