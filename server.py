@@ -51,7 +51,7 @@ def attended_transfer():
     response = client.send_action(action_status)
 
     # Manually sleep after sending the Status action to allow time for EventListener to gather events
-    time.sleep(3)  # Wait for 3 seconds (adjust this if needed)
+    time.sleep(1)  # Wait for 3 seconds (adjust this if needed)
 
     # Now, filter the channels for the internal number
     filtered_channels = [ch for ch in active_channels if internal_number in ch['caller_id_num']]
