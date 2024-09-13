@@ -21,8 +21,8 @@ def attended_transfer():
     action_status = SimpleAction(
         'Status',
     )
-    response = client.send_action(action_status)
-    if not response.response:
+    response = client.send_action(action_status).response
+    if not response:
         return "No response received"
     channels=[]
     for key in response.keys():
