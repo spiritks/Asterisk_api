@@ -22,7 +22,8 @@ def attended_transfer():
         'Status',
     )
     response = client.send_action(action_status)
-    return jsonify(response.response)
+    if not response.response:
+        return "got no response"
     channels = [channel.get_header('Channel') for channel in response.response if internal_number in channel.get_header('Channel')]
 
     if not channels:
