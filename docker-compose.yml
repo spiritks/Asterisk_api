@@ -10,3 +10,8 @@ services:
     #   - "host.docker.internal:host-gateway"
     network_mode: host
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "512M"

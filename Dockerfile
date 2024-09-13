@@ -1,5 +1,5 @@
 # Указываем базовый образ с Python
-FROM python:3.9-slim
+FROM python:latest
 
 # Устанавливаем рабочую директорию в контейнере
 WORKDIR /app

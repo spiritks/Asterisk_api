@@ -2,6 +2,7 @@ import os
 from flask import Flask, request, jsonify
 from asterisk.ami import AMIClient
 import socket
+import traceback
 app = Flask(__name__)
 
 # Получаем настройки из переменных окружения
@@ -15,7 +16,8 @@ client = AMIClient(address=AST_SERVER, port=AST_PORT)
 try:
     client.login(username=AST_USER, secret=AST_SECRET)
 except Exception as e:
-    ex_message = f"Failed to connect to Asterisk server error: {e}"
+    tb = traceback.format_exc()
+    ex_message = f"Failed to connect to Asterisk server error: {tb}"
 # client.login(username=AST_USER, secret=AST_SECRET)
 def is_port_open(host, port):
     """
