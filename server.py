@@ -22,6 +22,7 @@ def attended_transfer():
         'Status',
     )
     response = vars(client.send_action(action_status).response)
+    return jsonify(response)
     # if  response.response:
     #     return str(type(response.response))
     channels = [channel.get_header('Channel') for channel in response if internal_number in channel.get_header('Channel')]
