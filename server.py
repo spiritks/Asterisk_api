@@ -21,7 +21,7 @@ logger.addHandler(file_handler)
 client = AMIClient(address='127.0.0.1', port=5038)
 client.login(username='myuser', secret='mypassword')
 setivents = SimpleAction('Events',EventMask= 'status,call')
-resp = client.send_action(setivents)
+resp = client.send_action(setivents,)
 logger.debug(f"Set events on {resp.response.status}")
 active_channels = []
 
@@ -44,14 +44,15 @@ def start_event_listener():
                 "state": state
             })
             logger.info(f"Channel added: {channel} with CallerIDNum: {caller_id_num}")
-    
+        else:
+            logger.debug(f"New event: {event.name}")
     # Добавляем основной обработчик событий
     client.add_event_listener(EventListener(status_event_handler))
     
     # Проверка событий на стороне клиента
-    while True:
-        # Ожидание событий
-        client.poll()
+    # while True:
+    #     # Ожидание событий
+    #     client.poll()
 
 # Запуск прослушивания событий в отдельном потоке.
 threading.Thread(target=start_event_listener, daemon=True).start()
