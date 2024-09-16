@@ -110,16 +110,17 @@ def attended_transfer():
             'POST', '/channels', json=originate_data
         ).json()
 
-        # Шаг 3: Добавление каналов в bridge (мост)
-        bridge_data = {
-            'type': 'mixing'  # Тип моста
-        }
-        bridge = ari_request('POST', '/bridges', json=bridge_data).json()
+            # Шаг 3: Добавление каналов в bridge
+        def on_new_call_stasis(event):
+            bridging_data = {
+                'channel': [active_channel['id'], new_call['id']]
+            }
+            ari_request(
+                'POST', f"/bridges/{active_channel['id']}/addChannel", json=bridging_data
+            )
 
-        # Добавляем оба канала в бридж
-        ari_request(
-            'POST', f"/bridges/{bridge['id']}/addChannel", json={'channel': [active_channel['id'], new_call['id']]}
-        )
+        # Ждём, пока новый вызов поднимется и завершаем перевод
+        on_new_call_stasis(new_call)
 
         return jsonify({"success": True, "message": f"Attended transfer to {transfer_to_number} completed"})
 
