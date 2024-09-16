@@ -20,4 +20,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 666
 
 # Запускаем приложение через gunicorn с количеством рабочих процессов (например, 4)
-CMD ["gunicorn", "-w", "6", "-b","0.0.0.0:666", "-t","360", "server:app"]
+CMD [ "python","server.py" ]
+# CMD ["gunicorn", "-w", "6", "-b","0.0.0.0:666", "-t","360", "server:app"]
