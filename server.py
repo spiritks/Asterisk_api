@@ -2,7 +2,7 @@ import os
 import json
 import requests
 from flask import Flask, request, jsonify
-
+import logging
 app = Flask(__name__)
 
 # Получаем необходимые данные для подключения к Asterisk ARI (через переменные окружения)
@@ -13,6 +13,16 @@ ASTERISK_PASSWORD = os.getenv('AST_SECRET', 'mypassword')
 APPLICATION = os.getenv('APPLICATION', 'hello-world')
 
 BASE_URL = f"http://{ASTERISK_SERVER}:{ASTERISK_PORT}/ari"
+# Настройка логирования
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# Логирование в файл
+file_handler = logging.FileHandler('app.log')
+file_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
 # Функция для выполнения запроса к ARI
 def ari_request(method, endpoint, **kwargs):
@@ -21,6 +31,8 @@ def ari_request(method, endpoint, **kwargs):
         method, url, auth=(ASTERISK_USER, ASTERISK_PASSWORD), **kwargs
     )
     response.raise_for_status()  # Поднимаем исключение в случае ошибки HTTP
+    logger.debug(f"request {url} {method} {jsonify(**kwargs)}")
+    logger.debug(f"Response {response.json()}")
     return response
 @app.route('/show_channels', methods=['GET'])
 def show_channels():
@@ -54,7 +66,7 @@ def attended_transfer():
 
         if not active_channel:
             return jsonify({"error": "Active call not found for this internal number"}), 404
-
+        
         # Шаг 2: Инициализируем новый вызов на transfer_to_number
         originate_data = {
             'endpoint': f'SIP/{transfer_to_number}',
