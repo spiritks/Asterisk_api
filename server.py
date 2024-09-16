@@ -65,55 +65,67 @@ def attended_transfer():
     data = request.json
     internal_number = data.get('internal_number')
     transfer_to_number = data.get('transfer_to_number')
+    is_mobile = data.get('is_mobile', True)  # Флаг, указывающий, является ли номер мобильным
 
     if not internal_number or not transfer_to_number:
         return jsonify({"error": "Missing parameters"}), 400
 
     try:
-        # Шаг 1: Получаем список активных каналов
+        # Шаг 1: Получить список активных каналов
         response = ari_request('GET', '/channels')
         channels = response.json()
 
-        # Находим активный канал для абонента с указанным номером
+        # Найти активный канал для абонента с указанным внутренним номером (internal_number)
         active_channel = None
         for channel in channels:
             if channel.get('caller', {}).get('number') == internal_number:
                 active_channel = channel
-                logger.debug(f"Active channel found {active_channel}")
                 break
 
         if not active_channel:
             return jsonify({"error": "Active call not found for this internal number"}), 404
-        
-        # Шаг 2: Инициализируем новый вызов на transfer_to_number
-        originate_data = {
-            'endpoint': f'SIP/{transfer_to_number}',
-            'extension': transfer_to_number,
-            'callerId': internal_number,
-            'context': 'from-internal',
-            'priority': 1
-        }
-        logger.debug(f"trying to originate call to destination number with {originate_data}")
+        trunk_name='kazakhtelecom-out'
+        # Шаг 2: Инициализация нового звонка на transfer_to_number (в зависимости от типа номера)
+        if is_mobile:
+            # Формируем вызов на мобильный номер через SIP-транк
+            originate_data = {
+                'endpoint': f'SIP/{trunk_name}/{transfer_to_number}',  # Укажите имя вашего транка SIP
+                'extension': transfer_to_number,
+                'callerId': internal_number,
+                'context': 'from-internal',
+                'priority': 1
+            }
+        else:
+            # Внутренний вызов
+            originate_data = {
+                'endpoint': f'SIP/{transfer_to_number}',
+                'extension': transfer_to_number,
+                'callerId': internal_number,
+                'context': 'from-internal',
+                'priority': 1
+            }
+
+        # Инициируем новый звонок на внутренний или мобильный номер
         new_call = ari_request(
             'POST', '/channels', json=originate_data
         ).json()
-        logger.debug(f'Originate result {new_call}')
-        # Шаг 3: Создаём новый бридж и добавляем в него оба канала как только второй поднят
+
+        # Шаг 3: Добавление каналов в bridge (мост)
         bridge_data = {
             'type': 'mixing'  # Тип моста
         }
         bridge = ari_request('POST', '/bridges', json=bridge_data).json()
-        logger.debug(f"bridge created {bridge}")
+
         # Добавляем оба канала в бридж
-        both_channels_added =ari_request(
+        ari_request(
             'POST', f"/bridges/{bridge['id']}/addChannel", json={'channel': [active_channel['id'], new_call['id']]}
         )
-        logger.debug(f'Both channels added to the Bridge {both_channels_added}')
+
         return jsonify({"success": True, "message": f"Attended transfer to {transfer_to_number} completed"})
 
     except requests.exceptions.HTTPError as err:
         return jsonify({"error": str(err)}), 500
-    
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=666, debug=False)
