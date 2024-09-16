@@ -26,9 +26,10 @@ logger.debug(f"Set events on {resp.response.status}")
 active_channels = []
 
 # Функция запуска потока для непрерывного прослушивания событий AMI
-def start_event_listener():
-    def status_event_handler(event, **kwargs):
+
+def status_event_handler(sourse,event):
         global active_channels
+        logger.debug("Event handler started")
         if event.name == 'Status':
             logger.debug(f"Received Status Event: {event}")
             channel = event.get_header('Channel')
@@ -45,9 +46,9 @@ def start_event_listener():
             })
             logger.info(f"Channel added: {channel} with CallerIDNum: {caller_id_num}")
         else:
-            logger.debug(f"New event: {event.name}")
+            logger.debug(f"New event: {event.name}, {str(event)}, sourse: {str(sourse)}")
     # Добавляем основной обработчик событий
-    client.add_event_listener(EventListener(status_event_handler))
+client.add_event_listener(EventListener(status_event_handler))
     
     # Проверка событий на стороне клиента
     # while True:
@@ -55,7 +56,7 @@ def start_event_listener():
     #     client.poll()
 
 # Запуск прослушивания событий в отдельном потоке.
-threading.Thread(target=start_event_listener, daemon=True).start()
+# threading.Thread(target=start_event_listener, daemon=True).start()
 
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
