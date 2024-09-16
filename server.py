@@ -6,10 +6,10 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # Получаем необходимые данные для подключения к Asterisk ARI (через переменные окружения)
-ASTERISK_SERVER = os.getenv('ASTERISK_SERVER', '127.0.0.1')
+ASTERISK_SERVER = os.getenv('AST_SERVER', '127.0.0.1')
 ASTERISK_PORT = int(os.getenv('ASTERISK_PORT', 8088))
-ASTERISK_USER = os.getenv('ASTERISK_USER', 'ari-user')
-ASTERISK_PASSWORD = os.getenv('ASTERISK_PASSWORD', 'password')
+ASTERISK_USER = os.getenv('AST_USER', 'myuser')
+ASTERISK_PASSWORD = os.getenv('AST_SECRET', 'mypassword')
 APPLICATION = os.getenv('APPLICATION', 'hello-world')
 
 BASE_URL = f"http://{ASTERISK_SERVER}:{ASTERISK_PORT}/ari"
