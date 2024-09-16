@@ -62,6 +62,7 @@ def attended_transfer():
         for channel in channels:
             if channel.get('caller', {}).get('number') == internal_number:
                 active_channel = channel
+                logger.debug(f"Active channel found {active_channel}")
                 break
 
         if not active_channel:
@@ -75,22 +76,22 @@ def attended_transfer():
             'context': 'from-internal',
             'priority': 1
         }
-
+        logger.debug(f"trying to originate call to destination number with {originate_data}")
         new_call = ari_request(
             'POST', '/channels', json=originate_data
         ).json()
-
+        logger.debug(f'Originate result {new_call}')
         # Шаг 3: Создаём новый бридж и добавляем в него оба канала как только второй поднят
         bridge_data = {
             'type': 'mixing'  # Тип моста
         }
         bridge = ari_request('POST', '/bridges', json=bridge_data).json()
-
+        logger.debug(f"bridge created {bridge}")
         # Добавляем оба канала в бридж
-        ari_request(
+        both_channels_added =ari_request(
             'POST', f"/bridges/{bridge['id']}/addChannel", json={'channel': [active_channel['id'], new_call['id']]}
         )
-
+        logger.debug(f'Both channels added to the Bridge {both_channels_added}')
         return jsonify({"success": True, "message": f"Attended transfer to {transfer_to_number} completed"})
 
     except requests.exceptions.HTTPError as err:
