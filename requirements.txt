@@ -1,4 +1,4 @@
 flask
-asterisk-ami
+asterisk-ari-py
 python-dotenv
 gunicorn
