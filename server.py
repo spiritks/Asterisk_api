@@ -36,8 +36,8 @@ def ari_request(method, endpoint, **kwargs):
     return response
 @app.route('/originate', methods=['GET'])
 def Originate():
-    number_from = request.params['from']
-    number_to = request.params['to']
+    number_from = request.args.get('from',1000)
+    number_to = request.args.get('to',302)
     originate_data = {
             'endpoint': f'SIP/{number_from}',
             'extension': number_to,
