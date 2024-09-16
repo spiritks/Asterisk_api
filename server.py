@@ -19,10 +19,10 @@ logger.addHandler(file_handler)
 
 # Инициализация клиента AMI для работы с Asterisk
 client = AMIClient(address='127.0.0.1', port=5038,timeout=None)
-client.login(username='myuser', secret='mypassword')
-setivents = SimpleAction('Events',EventMask= 'status,call')
-resp = client.send_action(setivents,)
-logger.debug(f"Set events on {resp.response.status}")
+print(client.login(username='myuser', secret='mypassword').response)
+# setivents = SimpleAction('Events',EventMask= 'status,call')
+# resp = client.send_action(setivents,)
+# logger.debug(f"Set events on {resp.response.status}")
 active_channels = []
 
 # Функция запуска потока для непрерывного прослушивания событий AMI
