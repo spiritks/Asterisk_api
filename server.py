@@ -48,7 +48,9 @@ def status_event_handler(sourse,event):
         else:
             logger.debug(f"New event: {event.name}, {str(event)}, sourse: {str(sourse)}")
     # Добавляем основной обработчик событий
+logger.info("Setting up event listener")
 client.add_event_listener(EventListener(status_event_handler))
+logger.info("Event listener is set up")
     
     # Проверка событий на стороне клиента
     # while True:
