@@ -1,32 +1,51 @@
 import os
-import ari
+import json
+import requests
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Получаем переменные окружения для Asterisk сервера
-AST_SERVER = os.getenv('AST_SERVER', '127.0.0.1')
-AST_USER = os.getenv('AST_USER', 'myuser')
-AST_PASSWORD = os.getenv('AST_SECRET', 'mypassword')
+# Получаем необходимые данные для подключения к Asterisk ARI (через переменные окружения)
+ASTERISK_SERVER = os.getenv('ASTERISK_SERVER', '127.0.0.1')
+ASTERISK_PORT = int(os.getenv('ASTERISK_PORT', 8088))
+ASTERISK_USER = os.getenv('ASTERISK_USER', 'ari-user')
+ASTERISK_PASSWORD = os.getenv('ASTERISK_PASSWORD', 'password')
+APPLICATION = os.getenv('APPLICATION', 'hello-world')
 
-# Подключаемся к Asterisk через ARI
-client = ari.connect(f"http://{AST_SERVER}:8088", AST_USER, AST_PASSWORD)
+BASE_URL = f"http://{ASTERISK_SERVER}:{ASTERISK_PORT}/ari"
+
+# Функция для выполнения запроса к ARI
+def ari_request(method, endpoint, **kwargs):
+    url = f"{BASE_URL}{endpoint}"
+    response = requests.request(
+        method, url, auth=(ASTERISK_USER, ASTERISK_PASSWORD), **kwargs
+    )
+    response.raise_for_status()  # Поднимаем исключение в случае ошибки HTTP
+    return response
+@app.route('/show_channels', methods=['GET'])
+def show_channels():
+    try:
+        response = ari_request('GET', '/channels')
+        channels_data = response.json()
+        return jsonify(channels_data), 200  # Возвращаем данные каналов и успешный статус
+    except requests.exceptions.HTTPError as err:
+        return jsonify({"error": str(err)}), 500  # Если ошибка - показываем её
 
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
     data = request.json
-
     internal_number = data.get('internal_number')
     transfer_to_number = data.get('transfer_to_number')
 
     if not internal_number or not transfer_to_number:
-        return jsonify({"error": "Missing required parameters"}), 400
+        return jsonify({"error": "Missing parameters"}), 400
 
     try:
-        # Шаг 1. Найти канал по внутреннему номеру
-        channels = client.channels.list()
-        
-        # Найдем канал, где участвует internal_number
+        # Шаг 1: Получаем список активных каналов
+        response = ari_request('GET', '/channels')
+        channels = response.json()
+
+        # Находим активный канал для абонента с указанным номером
         active_channel = None
         for channel in channels:
             if channel.get('caller', {}).get('number') == internal_number:
@@ -34,29 +53,37 @@ def attended_transfer():
                 break
 
         if not active_channel:
-            return jsonify({"error": "No active channel found for this internal number"}), 404
+            return jsonify({"error": "Active call not found for this internal number"}), 404
 
-        # Шаг 2. Создадим новый звонок на transfer_to_number
-        new_call = client.channels.originate(
-            endpoint=f'SIP/{transfer_to_number}',
-            extension=transfer_to_number,
-            callerId=internal_number,
-            context='from-internal',
-            priority=1
+        # Шаг 2: Инициализируем новый вызов на transfer_to_number
+        originate_data = {
+            'endpoint': f'SIP/{transfer_to_number}',
+            'extension': transfer_to_number,
+            'callerId': internal_number,
+            'context': 'from-internal',
+            'priority': 1
+        }
+
+        new_call = ari_request(
+            'POST', '/channels', json=originate_data
+        ).json()
+
+        # Шаг 3: Создаём новый бридж и добавляем в него оба канала как только второй поднят
+        bridge_data = {
+            'type': 'mixing'  # Тип моста
+        }
+        bridge = ari_request('POST', '/bridges', json=bridge_data).json()
+
+        # Добавляем оба канала в бридж
+        ari_request(
+            'POST', f"/bridges/{bridge['id']}/addChannel", json={'channel': [active_channel['id'], new_call['id']]}
         )
 
-        # Шаг 3. Выполним передачу вызова, после ответа на новый звонок
-        @client.on_channel_event('StasisStart')
-        def on_stasis_start(event, channel):
-            if channel.id == new_call.id:
-                # Новый звонок поднят, выполняем attended transfer
-                client.channels.bridge(active_channel.id, channel.id)
-                return jsonify({"success": True, "message": "Attended transfer completed"})
+        return jsonify({"success": True, "message": f"Attended transfer to {transfer_to_number} completed"})
 
-        client.run(app)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    except requests.exceptions.HTTPError as err:
+        return jsonify({"error": str(err)}), 500
+    
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=666,debug=False)
+    app.run(host="0.0.0.0", port=666, debug=False)
