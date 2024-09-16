@@ -34,6 +34,21 @@ def ari_request(method, endpoint, **kwargs):
     logger.debug(f"request {url} {method} {jsonify(**kwargs)}")
     logger.debug(f"Response {response.json()}")
     return response
+@app.route('/originate', methods=['GET'])
+def Originate():
+    number_from = request.params['from']
+    number_to = request.params['to']
+    originate_data = {
+            'endpoint': f'SIP/{number_from}',
+            'extension': number_to,
+            'context': 'from-internal',
+            'priority': 1
+        }
+    logger.debug(f"trying to originate call to destination number with {originate_data}")
+    new_call = ari_request(
+            'POST', '/channels', json=originate_data
+    ).json()
+    logger.debug(f'Originate result {new_call}')
 @app.route('/show_channels', methods=['GET'])
 def show_channels():
     try:
