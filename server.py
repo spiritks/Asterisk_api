@@ -40,6 +40,7 @@ def Originate():
     number_to = request.args.get('to',302)
     originate_data = {
             'endpoint': f'SIP/{number_from}',
+            'callerId': number_to,
             'extension': number_to,
             'context': 'from-internal',
             'priority': 1
@@ -49,6 +50,7 @@ def Originate():
             'POST', '/channels', json=originate_data
     ).json()
     logger.debug(f'Originate result {new_call}')
+    return new_call
 @app.route('/show_channels', methods=['GET'])
 def show_channels():
     try:
