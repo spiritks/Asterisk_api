@@ -108,6 +108,30 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         logger.error(f"General error in task: {str(e)}")
         self.update_state(state='FAILURE', meta={'error': str(e)})
         raise e
+def send_dtmf_signals(channel_id, dtmf_sequence):
+    dtmf_data = {
+        'dtmf': dtmf_sequence,
+        'before': 0,    # Время до передачи сигнала
+        'duration': 100 # Длина сигнала
+    }
+    return ari_request('POST', f'/channels/{channel_id}/dtmf', json=dtmf_data).json()
+
+
+@app.route('/api/dtmf_transfer', methods=['POST'])
+def dtmf_transfer():
+    data = request.json
+    internal_number = data.get('internal_number')
+    transfer_to_number = data.get('transfer_to_number')
+    is_mobile = data.get('is_mobile', True)
+    channels = ari_request('GET', '/channels')  # Получаем список всех каналов
+    active_channel = next((channel for channel in channels 
+        if channel.get('caller', {}).get('number') == internal_number), None)
+        
+    if not active_channel:
+            logger.error(f"No active call found for number {internal_number}")
+            raise ValueError('Active call not found')
+    return send_dtmf_signals(active_channel[id],f"*2{transfer_to_number}").json()
+    
 # Маршрут для запуска задачи
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
@@ -137,7 +161,7 @@ def Originate():
     logger.debug(f"trying to originate call to destination number with {originate_data}")
     new_call = ari_request(
             'POST', '/channels', json=originate_data
-    ).json()
+    )
     logger.debug(f'Originate result {new_call}')
     return jsonify(new_call)
 
