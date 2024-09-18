@@ -39,10 +39,11 @@ def wait_for_channel_up(channel_id):
             while True:
                 channel_response = ari_request('GET', f'/channels/{channel_id}')
                 channel_state = channel_response.json()['state']
-
+                logger.debug(f'Chanel {channel_id} is {channel_state}')
                 # Ждем пока канал не окажется в состоянии 'Up' или 'Ringing'
                 if channel_state == 'Up':
                     #  or channel_state == 'Ringing'
+                
                     break
                 time.sleep(1)  # Ждем 1 секунду и повторяем запрос
 
