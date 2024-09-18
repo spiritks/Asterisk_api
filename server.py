@@ -1,11 +1,10 @@
 import os
 import json
-import requests
 import time
+import requests
 import logging
 from flask import Flask, request, jsonify, url_for
 from celery import Celery
-from celery.result import AsyncResult
 
 # Инициализация Flask-приложения
 app = Flask(__name__)
@@ -20,10 +19,10 @@ APPLICATION = os.getenv('APPLICATION', 'hello-world')
 BASE_URL = f"http://{ASTERISK_SERVER}:{ASTERISK_PORT}/ari"
 
 # Настройки Celery и Redis
-app.config['CELERY_BROKER_URL'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-app.config['CELERY_RESULT_BACKEND'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+app.config['CELERY_BROKER_URL'] = os.getenv('REDIS_URL', 'redis://redis:6379/0')
+app.config['CELERY_RESULT_BACKEND'] = os.getenv('REDIS_URL', 'redis://redis:6379/0')
 
-# Инициализация Celery
+# Инициализация Celery с конфигурацией Flask
 celery = Celery(app.import_name, backend=app.config['CELERY_RESULT_BACKEND'],
                 broker=app.config['CELERY_BROKER_URL'])
 
@@ -60,19 +59,18 @@ def wait_for_channel_up(channel_id):
             break
         time.sleep(1)
 
-# Определяем задачу для перевода вызовов (асинхронная задача в Celery)
+# Задача для перевода вызовов (асинхронная задача в Celery)
 @celery.task(bind=True)
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
         logger.debug(f'Looking for active call for internal number {internal_number}')
         
-        # Получаем список каналов и проверяем наличие активного канала
         channels = ari_request('GET', '/channels')
         active_channel = next((channel for channel in channels 
                                if channel.get('caller', {}).get('number') == internal_number), None)
         
         if not active_channel:
-            logger.error(f"No active call found for internal number {internal_number}")
+            logger.error(f"No active call found for number {internal_number}")
             self.update_state(state='FAILURE', meta={'error': 'Active call not found'})
             return {'error': 'Active call not found'}
 
@@ -88,19 +86,16 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             'priority': 1
         }
 
-        # Инициируем звонок
         new_call = ari_request('POST', '/channels', json=originate_data)
         logger.debug(f'New call initiated: {new_call["id"]}')
 
-        # Ожидаем, пока новый канал поднимется
         wait_for_channel_up(new_call['id'])
 
-        # Создаем мост (bridge) и добавляем активные каналы в мост
+        # Создаем мост для соединения обоих каналов
         bridge_data = {'type': 'mixing'}
         bridge = ari_request('POST', '/bridges', json=bridge_data)
         logger.debug(f'Bridge created: {bridge["id"]}')
         
-        # Добавляем оба канала в мост
         ari_request('POST', f'/bridges/{bridge["id"]}/addChannel',
                     json={'channel': [active_channel['id'], new_call['id']]})
 
@@ -119,14 +114,13 @@ def attended_transfer():
     transfer_to_number = data.get('transfer_to_number')
     is_mobile = data.get('is_mobile', True)
 
-    logger.debug(f'Received attended transfer request: from {internal_number} to {transfer_to_number}')
+    logger.debug(f'Request for attended transfer: from {internal_number} to {transfer_to_number}')
 
-    # Запуск задачи через Celery
     task = attended_transfer_task.apply_async(args=[internal_number, transfer_to_number, is_mobile])
     
     return jsonify({'task_id': task.id, 'status_url': url_for('task_status', task_id=task.id, _external=True)}), 202
 
-# Маршрут для проверки статуса асинхронной задачи
+# Маршрут для проверки статуса задачи
 @app.route('/status/<task_id>')
 def task_status(task_id):
     task_result = celery.AsyncResult(task_id)
