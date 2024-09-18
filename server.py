@@ -128,7 +128,7 @@ def Originate():
     number_from = request.args.get('from',1000)
     number_to = request.args.get('to',302)
     originate_data = {
-            'endpoint': f'SIP/{number_to}',
+            'endpoint': f'SIP/kazakhtelecom-out/{number_to}',
             'callerId': number_to,
             'extension': number_from,
             'context': 'from-internal',
