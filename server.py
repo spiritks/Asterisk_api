@@ -130,7 +130,7 @@ def dtmf_transfer():
     if not active_channel:
             logger.error(f"No active call found for number {internal_number}")
             raise ValueError('Active call not found')
-    return send_dtmf_signals(active_channel[id],f"*2{transfer_to_number}").json()
+    return send_dtmf_signals(active_channel['id'],f"*2{transfer_to_number}").json()
     
 # Маршрут для запуска задачи
 @app.route('/api/attended_transfer', methods=['POST'])
