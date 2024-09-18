@@ -58,8 +58,9 @@ def wait_for_channel_up(channel_id):
             break
         time.sleep(1)
 
+
 # Задача для перевода вызова (асинхронная задача в Celery)
-@celery.task(bind=True, name='app.attended_transfer_task')  # Обязательно добавьте явное имя
+@celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
         logger.debug(f'Looking for active call for internal number {internal_number}')
@@ -70,8 +71,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}")
-            self.update_state(state='FAILURE', meta={'error': 'Active call not found'})
-            return {'error': 'Active call not found'}
+            raise ValueError('Active call not found')
 
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
 
@@ -100,11 +100,14 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
 
         return {'status': 'success', 'message': f"Attended transfer to {transfer_to_number} completed"}
 
+    except ValueError as e:
+        logger.error(f"Error in attended transfer for {internal_number} -> {transfer_to_number}: {str(e)}")
+        self.update_state(state='FAILURE', meta={'error': str(e)})  # Исправляем, чтобы отмечать задачу проваленной
+        raise e  # Передаём реальное исключение для правильной сериализации
     except Exception as e:
-        logger.error(f"Error during attended transfer: {e}")
+        logger.error(f"General error in task: {str(e)}")
         self.update_state(state='FAILURE', meta={'error': str(e)})
         raise e
-
 # Маршрут для запуска задачи
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
