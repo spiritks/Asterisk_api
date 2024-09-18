@@ -3,6 +3,7 @@ import json
 import requests
 from flask import Flask, request, jsonify
 import logging
+import time
 app = Flask(__name__)
 
 # Получаем необходимые данные для подключения к Asterisk ARI (через переменные окружения)
@@ -34,6 +35,17 @@ def ari_request(method, endpoint, **kwargs):
     logger.debug(f"request {url} {method} {jsonify(**kwargs)}")
     logger.debug(f"Response {response.json()}")
     return response
+def wait_for_channel_up(channel_id):
+            while True:
+                channel_response = ari_request('GET', f'/channels/{channel_id}')
+                channel_state = channel_response.json()['state']
+
+                # Ждем пока канал не окажется в состоянии 'Up' или 'Ringing'
+                if channel_state == 'Up':
+                    #  or channel_state == 'Ringing'
+                    break
+                time.sleep(1)  # Ждем 1 секунду и повторяем запрос
+
 @app.route('/originate', methods=['GET'])
 def Originate():
     number_from = request.args.get('from',1000)
@@ -120,6 +132,7 @@ def attended_transfer():
             )
 
         # Ждём, пока новый вызов поднимется и завершаем перевод
+        wait_for_channel_up(new_call['id'])
         on_new_call_stasis(new_call)
 
         return jsonify({"success": True, "message": f"Attended transfer to {transfer_to_number} completed"})
