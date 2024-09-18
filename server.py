@@ -114,6 +114,9 @@ def wait_for_channel_up(channel_id):
 
 
 # Маршрут для вызова асинхронного перевода через Celery
+@app.route('/', methods=['get'])
+def Default():
+    return "OK"
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
     data = request.json
