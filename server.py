@@ -123,6 +123,33 @@ def attended_transfer():
     
     return jsonify({'task_id': task.id, 'status_url': url_for('task_status', task_id=task.id, _external=True)}), 202
 
+@app.route('/originate', methods=['GET'])
+def Originate():
+    number_from = request.args.get('from',1000)
+    number_to = request.args.get('to',302)
+    originate_data = {
+            'endpoint': f'SIP/{number_from}',
+            'callerId': number_to,
+            'extension': number_to,
+            'context': 'from-internal',
+            'priority': 1
+        }
+    logger.debug(f"trying to originate call to destination number with {originate_data}")
+    new_call = ari_request(
+            'POST', '/channels', json=originate_data
+    ).json()
+    logger.debug(f'Originate result {new_call}')
+    return new_call
+
+@app.route('/show_channels', methods=['GET'])
+def show_channels():
+    try:
+        response = ari_request('GET', '/channels')
+        channels_data = response.json()
+        return jsonify(channels_data), 200  # Возвращаем данные каналов и успешный статус
+    except requests.exceptions.HTTPError as err:
+        return jsonify({"error": str(err)}), 500  # Если ошибка - показываем её
+
 # Маршрут для проверки статуса задачи
 @app.route('/status/<task_id>')
 def task_status(task_id):
