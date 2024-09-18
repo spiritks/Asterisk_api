@@ -1,41 +1,36 @@
-# Указываем базовый образ с Python (alpine является легковесным образом)
+# Базовый образ Python
 FROM python:3.9-alpine3.20
 
-# Устанавливаем рабочую директорию в контейнере
+# Устанавливаем переменные окружения и рабочую директорию приложения
+ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# # Обновляем Alpine, удаляем libressl-dev и устанавливаем необходимые пакеты
-# RUN apk update && \
-#     apk del libressl-dev && \
-#     apk add --no-cache \
-#     git \
-#     gcc \
-#     musl-dev \
-#     linux-headers \
-#     libffi-dev \
-#     openssl-dev \
-#     bash
-
-# # Клонируем репозиторий ari-py
-# RUN git clone https://github.com/asterisk/ari-py /tmp/ari-py
-
-# # Применяем команду "sed" для нахождения всех упоминаний urlparse и замены их на urllib.parse
-# RUN sed -i 's/import urlparse/from urllib.parse import urlparse, urljoin/' /tmp/ari-py/ari/client.py
-
-# # Устанавливаем исправленную версию
-# RUN pip install /tmp/ari-py
+# Устанавливаем зависимости системы
+RUN apk update && apk add --no-cache \
+    build-base \
+    musl-dev \
+    linux-headers \
+    gcc \
+    g++ \
+    libffi-dev \
+    openssl-dev \
+    bash \
+    redis \
+    && pip install --upgrade pip
 
 # Копируем файл с зависимостями
 COPY requirements.txt .
 
-# Устанавливаем остальные зависимости
+# Устанавливаем зависимости Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем всё приложение
+# Копируем все файлы приложения в рабочую директорию
 COPY . .
 
-# Открываем необходимый порт Flask
+# Открываем порт сервера Flask
 EXPOSE 666
 
-# Запускаем приложение
-CMD [ "python", "server.py" ]
+# Запуск Redis внутри контейнера (опционально)
+# Запустим приложение через gunicorn из файла "server.py"
+# CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:666", "--timeout", "360", "server:app"]
+CMD ["python","server.py"]

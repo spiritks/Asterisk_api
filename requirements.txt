@@ -1,4 +1,6 @@
-flask
-requests
 python-dotenv
+Flask
+Celery
+redis
 gunicorn
+requests

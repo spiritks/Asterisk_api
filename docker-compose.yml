@@ -1,17 +1,27 @@
 version: '3'
 services:
-  asterisk-api:
+  web:
     build: .
     # ports:
-    #   - "666:5000"
+    #   - "666:666"
     volumes:
       - .:/app
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://localhost:6379/0
     network_mode: host
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: "512M"
+
+  redis:
+    image: "redis:alpine"
+    network_mode: host
+  celery:
+    build: .
+    command: celery -A server.celery worker --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    environment:
+      - REDIS_URL=redis://localhost:6379/0
+    network_mode: host
