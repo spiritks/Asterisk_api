@@ -14,7 +14,6 @@ ASTERISK_SERVER = os.getenv('AST_SERVER', '127.0.0.1')
 ASTERISK_PORT = int(os.getenv('AST_PORT', 8088))
 ASTERISK_USER = os.getenv('AST_USER', 'myuser')
 ASTERISK_PASSWORD = os.getenv('AST_SECRET', 'mypassword')
-APPLICATION = os.getenv('APPLICATION', 'hello-world')
 
 BASE_URL = f"http://{ASTERISK_SERVER}:{ASTERISK_PORT}/ari"
 
@@ -34,7 +33,7 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
-# Функция для выполнения запросов к ARI
+# Функция для выполнения запросов к ARI (Asterisk)
 def ari_request(method, endpoint, **kwargs):
     url = f"{BASE_URL}{endpoint}"
     try:
@@ -59,13 +58,13 @@ def wait_for_channel_up(channel_id):
             break
         time.sleep(1)
 
-# Задача для перевода вызовов (асинхронная задача в Celery)
-@celery.task(bind=True)
+# Задача для перевода вызова (асинхронная задача в Celery)
+@celery.task(bind=True, name='app.attended_transfer_task')  # Обязательно добавьте явное имя
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
         logger.debug(f'Looking for active call for internal number {internal_number}')
         
-        channels = ari_request('GET', '/channels')
+        channels = ari_request('GET', '/channels')  # Получаем список всех каналов
         active_channel = next((channel for channel in channels 
                                if channel.get('caller', {}).get('number') == internal_number), None)
         
@@ -106,7 +105,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         self.update_state(state='FAILURE', meta={'error': str(e)})
         raise e
 
-# Маршрут для запуска задачи перевода вызова через Celery
+# Маршрут для запуска задачи
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
     data = request.json
@@ -114,8 +113,9 @@ def attended_transfer():
     transfer_to_number = data.get('transfer_to_number')
     is_mobile = data.get('is_mobile', True)
 
-    logger.debug(f'Request for attended transfer: from {internal_number} to {transfer_to_number}')
+    logger.debug(f"Attended transfer request from {internal_number} to {transfer_to_number}")
 
+    # Запуск задачи через Celery
     task = attended_transfer_task.apply_async(args=[internal_number, transfer_to_number, is_mobile])
     
     return jsonify({'task_id': task.id, 'status_url': url_for('task_status', task_id=task.id, _external=True)}), 202
@@ -133,15 +133,6 @@ def task_status(task_id):
 
     return jsonify(response)
 
-# Дополнительный маршрут для отображения всех каналов
-@app.route('/show_channels', methods=['GET'])
-def show_channels():
-    try:
-        channels = ari_request('GET', '/channels')
-        return jsonify(channels), 200
-    except requests.exceptions.HTTPError as e:
-        return jsonify({"error": str(e)}), 500
-
 if __name__ == '__main__':
-    logger.debug("Starting Flask application on port 666")
+    logger.debug("Starting Flask application")
     app.run(host="0.0.0.0", port=666, debug=False)
