@@ -106,7 +106,12 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         raise e  # Передаём реальное исключение для правильной сериализации
     except Exception as e:
         logger.error(f"General error in task: {str(e)}")
-        self.update_state(state='FAILURE', meta={'error': str(e)})
+        self.update_state(
+        state='FAILURE', 
+        meta={'exc_type': type(e).__name__, 'exc_message': str(e)}
+    )
+
+        
         raise e
 def send_dtmf_signals(channel_id, dtmf_sequence):
     dtmf_data = {
