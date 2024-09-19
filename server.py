@@ -102,7 +102,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
 
     except ValueError as e:
         logger.error(f"Error in attended transfer for {internal_number} -> {transfer_to_number}: {str(e)}")
-        self.update_state(state='FAILURE', meta={'error': str(e)})  # Исправляем, чтобы отмечать задачу проваленной
+        self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)}) # Исправляем, чтобы отмечать задачу проваленной
         raise e  # Передаём реальное исключение для правильной сериализации
     except Exception as e:
         logger.error(f"General error in task: {str(e)}")
