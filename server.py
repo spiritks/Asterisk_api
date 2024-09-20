@@ -3,7 +3,7 @@ import json
 import time
 import requests
 import logging
-from flask import Flask, request, jsonify, url_for
+from flask import Flask, request, jsonify, url_for,Response
 from celery import Celery
 
 # Инициализация Flask-приложения
@@ -192,6 +192,36 @@ def task_status(task_id):
 
     return jsonify(response)
 
+@app.route('/logs/app', methods=['GET'])
+def get_app_logs():
+    LOG_FILE_PATH=app.log
+    try:
+        # Открываем и читаем файл логов
+        with open(LOG_FILE_PATH, 'r') as log_file:
+            logs = log_file.readlines()
+        return Response(logs, mimetype='text/plain'), 200  # Возвращаем содержимое как текст
+    except Exception as e:
+        logger.error(f"Error reading log file: {e}")
+        return jsonify({"error": f"Could not read app.log: {str(e)}"}), 500
+
+
+# -----------------------------------
+# Endpoint для отображения docker-compose logs
+# -----------------------------------
+@app.route('/logs/compose', methods=['GET'])
+def get_docker_logs():
+    try:
+        # Выполняем команду `docker-compose logs` для получения всех Docker-логов
+        result = subprocess.run(["docker-compose", "logs"], capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.error(f"Error executing docker-compose logs: {result.stderr}")
+            return jsonify({"error": result.stderr.strip()}), 500
+
+        return Response(result.stdout, mimetype='text/plain'), 200  # Выводим логи в браузер
+    except Exception as e:
+        logger.error(f"Error executing docker-compose logs: {e}")
+        return jsonify({"error": f"Could not run docker-compose logs: {str(e)}"}), 500
 if __name__ == '__main__':
     logger.debug("Starting Flask application")
     app.run(host="0.0.0.0", port=666, debug=False)
