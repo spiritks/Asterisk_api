@@ -194,7 +194,7 @@ def task_status(task_id):
 
 @app.route('/logs/app', methods=['GET'])
 def get_app_logs():
-    LOG_FILE_PATH=app.log
+    LOG_FILE_PATH="app.log"
     try:
         # Открываем и читаем файл логов
         with open(LOG_FILE_PATH, 'r') as log_file:
