@@ -5,7 +5,7 @@ import requests
 import logging
 from flask import Flask, request, jsonify, url_for,Response
 from celery import Celery
-
+import subprocess
 # Инициализация Flask-приложения
 app = Flask(__name__)
 
