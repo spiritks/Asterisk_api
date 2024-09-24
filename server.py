@@ -93,28 +93,34 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
     try:
         logger.debug(f'Looking for active call for internal number {internal_number}')
         
-        # Получаем список сессий и ищем активный канал
+        # Получаем список каналов и ищем активный канал по CallerIDNum
         channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
         if not channels_response:
             raise ValueError('Cannot retrieve channels')
 
         active_channel = None
         for line in channels_response.splitlines():
+            # Ищем строки с CallerIDNum, чтобы сопоставить соответствующий канал
             if f"CallerIDNum: {internal_number}" in line:
-                # Найдена активная сессия для внутреннего номера
-                active_channel = line.split()[1]  # Предполагаем формат строки "Channel: CHANNEL_ID"
+                # Следующая строка с Channel содержит настоящий ID канала
+                for chan_line in channels_response.splitlines():
+                    if "Channel: " in chan_line:
+                        active_channel = chan_line.split(':', 1)[1].strip()  # Извлекаем значение после "Channel: "
+                        break
                 break
         
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}")
             raise ValueError('Active call not found')
 
+        logger.debug(f"Active channel found for Caller ID {internal_number}: {active_channel}")
+
         # Определяем транк
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
-
+        
         logger.debug(f"Initiating attended transfer from {internal_number} to {transfer_to_number}")
 
-        # Выполняем команду Redirect (перевод активного канала)
+        # Выполняем команду Redirect (перенаправляем активный канал)
         redirect_command = (
             f'Action: Redirect\r\n'
             f'Channel: {active_channel}\r\n'
@@ -122,8 +128,14 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             f'Context: from-internal\r\n'
             f'Priority: 1\r\n\r\n'
         )
-        send_ami_command(redirect_command)
+        response = send_ami_command(redirect_command)
 
+        if 'Response: Success' in response:
+            logger.debug(f"Successfully redirected channel: {active_channel} to {transfer_to_number}")
+        else:
+            logger.error(f"Failed to redirect channel: {response}")
+            raise ValueError(f"Redirection failed: {response}")
+        
         return {'status': 'success', 'message': f"Attended transfer to {transfer_to_number} completed"}
 
     except ValueError as e:
@@ -134,6 +146,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         logger.error(f"General error in task: {str(e)}")
         self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
         raise e
+    
 
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
