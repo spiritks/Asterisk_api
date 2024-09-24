@@ -6,6 +6,10 @@ import logging
 from flask import Flask, request, jsonify, url_for, Response
 from celery import Celery
 import subprocess
+from dotenv import load_dotenv  # Импортируем dotenv
+
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
 # Инициализация Flask-приложения
 app = Flask(__name__)
