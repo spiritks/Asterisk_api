@@ -62,7 +62,8 @@ def send_ami_command(command):
         # Получаем ответ на login
         response = recv_response()
         if 'Response: Success' not in response:
-            logger.error('AMI login failed!')
+            logger.error(f'AMI login failed! {response}')
+
             return None
 
         # Отправляем команду
