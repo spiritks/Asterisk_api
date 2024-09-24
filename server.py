@@ -92,61 +92,100 @@ def send_ami_command(command):
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
         logger.debug(f'Looking for active call for internal number {internal_number}')
-        
-        # Получаем список каналов и ищем активный канал по CallerIDNum
+
+        # 1. Получаем список каналов и ищем активный канал по CallerIDNum (абонент A)
         channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
         if not channels_response:
             raise ValueError('Cannot retrieve channels')
 
         active_channel = None
         for line in channels_response.splitlines():
-            # Ищем строки с CallerIDNum, чтобы сопоставить соответствующий канал
             if f"CallerIDNum: {internal_number}" in line:
-                # Следующая строка с Channel содержит настоящий ID канала
                 for chan_line in channels_response.splitlines():
                     if "Channel: " in chan_line:
-                        active_channel = chan_line.split(':', 1)[1].strip()  # Извлекаем значение после "Channel: "
+                        active_channel = chan_line.split(':', 1)[1].strip()
                         break
                 break
-        
+
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}")
             raise ValueError('Active call not found')
 
         logger.debug(f"Active channel found for Caller ID {internal_number}: {active_channel}")
 
-        # Определяем транк
+        # 2. Инициируем новый вызов на целевой номер B (transfer_to_number)
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
-        
-        logger.debug(f"Initiating attended transfer from {internal_number} to {transfer_to_number}")
 
-        # Выполняем команду Redirect (перенаправляем активный канал)
-        redirect_command = (
-            f'Action: Redirect\r\n'
-            f'Channel: {active_channel}\r\n'
-            f'Exten: {transfer_to_number}\r\n'
+        logger.debug(f"Initiating new call to {transfer_to_number} through trunk '{trunk_name}'")
+
+        originate_command = (
+            f'Action: Originate\r\n'
+            f'Channel: SIP/{trunk_name}/{transfer_to_number}\r\n'
+            f'CallerID: {internal_number}\r\n'
             f'Context: from-internal\r\n'
-            f'Priority: 1\r\n\r\n'
+            f'Priority: 1\r\n'
+            f'Async: true\r\n'
         )
-        response = send_ami_command(redirect_command)
+        originate_response = send_ami_command(originate_command)
 
-        if 'Response: Success' in response:
-            logger.debug(f"Successfully redirected channel: {active_channel} to {transfer_to_number}")
+        if "Response: Success" not in originate_response:
+            logger.error(f"Failed to originate call to {transfer_to_number}: {originate_response}")
+            raise ValueError(f"Origination failed: {originate_response}")
+
+        logger.debug(f"New call to {transfer_to_number} initiated: {originate_response}")
+
+        # Получаем новый канал для абонента B
+        new_channel = None
+        while not new_channel:
+            channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+            for line in channels_response.splitlines():
+                if f"CallerIDNum: {transfer_to_number}" in line:
+                    for chan_line in channels_response.splitlines():
+                        if "Channel: " in chan_line:
+                            new_channel = chan_line.split(':', 1)[1].strip()
+                            break
+            if not new_channel:
+                time.sleep(1)  # Ждем, пока соединение будет установлено
+        logger.debug(f"New channel for {transfer_to_number} found: {new_channel}")
+
+        # 3. Ждем, пока новый вызов не перейдет в состояние "Up"
+        while True:
+            channel_status = send_ami_command(f'Action: Status\r\nChannel: {new_channel}\r\n\r\n')
+            if 'ChannelStateDesc: Up' in channel_status:
+                break
+            time.sleep(1)
+
+        logger.debug(f"Call to {transfer_to_number} is now Up. Proceeding with transfer.")
+
+        # 4. Создаем мост (Bridge) и добавляем оба канала (A и B)
+        logger.debug(f"Creating bridge to connect {internal_number} and {transfer_to_number}")
+        bridge_command = (
+            f'Action: Bridge\r\n'
+            f'BridgeUniqueid: {internal_number}_{transfer_to_number}_bridge\r\n'
+            f'BridgeType: mixing\r\n'
+            f'Channel: {active_channel},{new_channel}\r\n\r\n'
+        )
+        bridge_response = send_ami_command(bridge_command)
+
+        if "Response: Success" in bridge_response:
+            logger.debug(f"Bridge created successfully, channels connected.")
         else:
-            logger.error(f"Failed to redirect channel: {response}")
-            raise ValueError(f"Redirection failed: {response}")
-        
+            logger.error(f"Failed to create bridge: {bridge_response}")
+            raise ValueError(f"Bridge failed: {bridge_response}")
+
         return {'status': 'success', 'message': f"Attended transfer to {transfer_to_number} completed"}
 
     except ValueError as e:
         logger.error(f"Error in attended transfer for {internal_number} -> {transfer_to_number}: {str(e)}")
         self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
-        raise e  # Передаём реальное исключение
-    except Exception as e:
-        logger.error(f"General error in task: {str(e)}")
-        self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
         raise e
-    
+    except Exception as e:
+        logger.error(f"General error in attended transfer task: {str(e)}")
+        self.update_state(
+            state='FAILURE',
+            meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
+        )
+        raise e
 
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
