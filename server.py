@@ -186,6 +186,38 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
         )
         raise e
+app.route('/originate_call', methods=['POST'])
+def originate_call():
+    # Получаем параметры для Originate из запроса
+    data = request.json
+    from_number = data.get('from')
+    to_number = data.get('to')
+    context = data.get('context', 'from-internal')  # Контекст по умолчанию
+    caller_id = data.get('caller_id', from_number)  # ID звонящего (по умолчанию тот же номер)
+    priority = data.get('priority', 1)  # Приоритет по умолчанию
+
+    if not from_number or not to_number:
+        return jsonify({"error": "Missing 'from' or 'to' parameter"}), 400
+
+    # Команда Originate для AMI
+    originate_command = (
+        f'Action: Originate\r\n'
+        f'Channel: SIP/{from_number}\r\n'  # Канал для выхода (например, через SIP)
+        f'Exten: {to_number}\r\n'          # Куда совершается вызов
+        f'Context: {context}\r\n'          # Контекст в Asterisk диалплане
+        f'Priority: {priority}\r\n'        # Приоритет вызова
+        f'CallerID: {caller_id}\r\n'       # Идентификатор звонящего (CallerID)
+        f'Async: true\r\n\r\n'             # Асинхронное выполнение
+    )
+
+    # Отправляем команду на AMI
+    response = send_ami_command(originate_command)
+
+    if response and 'Response: Success' in response:
+        return jsonify({"status": "success", "message": "Call initiated successfully"})
+    else:
+        logger.error(f"Failed to initiate call: {response}")
+        return jsonify({"error": "Failed to initiate call", "response": response}), 500
 
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
