@@ -1,21 +1,20 @@
 import os
 import json
 import time
-import requests
+import socket
 import logging
-from flask import Flask, request, jsonify, url_for,Response
+from flask import Flask, request, jsonify, url_for, Response
 from celery import Celery
 import subprocess
+
 # Инициализация Flask-приложения
 app = Flask(__name__)
 
-# Настройки для подключения к Asterisk ARI (через переменные окружения)
-ASTERISK_SERVER = os.getenv('AST_SERVER', '127.0.0.1')
-ASTERISK_PORT = int(os.getenv('AST_PORT', 8088))
-ASTERISK_USER = os.getenv('AST_USER', 'myuser')
-ASTERISK_PASSWORD = os.getenv('AST_SECRET', 'mypassword')
-
-BASE_URL = f"http://{ASTERISK_SERVER}:{ASTERISK_PORT}/ari"
+# Настройки для подключения к Asterisk AMI (через переменные окружения)
+AMI_HOST = os.getenv('AMI_HOST', '127.0.0.1')
+AMI_PORT = int(os.getenv('AMI_PORT', 5038))
+AMI_USER = os.getenv('AMI_USER', 'admin')
+AMI_PASSWORD = os.getenv('AMI_PASSWORD', 'password')
 
 # Настройки Celery и Redis
 app.config['CELERY_BROKER_URL'] = os.getenv('REDIS_URL', 'redis://redis:6379/0')
@@ -33,111 +32,104 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
-# Функция для выполнения запросов к ARI (Asterisk)
-def ari_request(method, endpoint, **kwargs):
-    url = f"{BASE_URL}{endpoint}"
+# Функция для отправки команды в Asterisk AMI через сокет
+def send_ami_command(command):
+    sock = None
     try:
-        response = requests.request(
-            method, url, auth=(ASTERISK_USER, ASTERISK_PASSWORD), **kwargs
+        # Подключаемся к Asterisk AMI
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((AMI_HOST, AMI_PORT))
+        
+        # Логинимся
+        login_command = (
+            f'Action: Login\r\n'
+            f'Username: {AMI_USER}\r\n'
+            f'Secret: {AMI_PASSWORD}\r\n'
+            f'Events: off\r\n\r\n'
         )
-        response.raise_for_status()
-        logger.debug(f"Request {url} Method: {method} Payload: {kwargs}")
-        logger.debug(f"Response {response.json()}")
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"ARI Request error: {e}")
-        raise e
+        sock.sendall(login_command.encode())
+        
+        # Чтение ответа от AMI
+        def recv_response():
+            response = ''
+            while True:
+                data = sock.recv(1024).decode()
+                response += data
+                if '\r\n\r\n' in data:
+                    break
+            return response
+        
+        # Получаем ответ на login
+        response = recv_response()
+        if 'Response: Success' not in response:
+            logger.error('AMI login failed!')
+            return None
 
-# Ожидание поднятия канала до состояния 'Up'
-def wait_for_channel_up(channel_id):
-    while True:
-        channel_response = ari_request('GET', f'/channels/{channel_id}')
-        channel_state = channel_response['state']
-        logger.debug(f'Channel {channel_id} state: {channel_state}')
-        if channel_state == 'Up':
-            break
-        time.sleep(1)
+        # Отправляем команду
+        logger.debug(f"Sending AMI command: {command}")
+        sock.sendall(command.encode())
+        
+        # Получаем ответ на нашу команду
+        response = recv_response()
+        logger.debug(f"AMI Response: {response}")
+        
+        return response
+    except Exception as e:
+        logger.error(f"AMI command failed: {e}")
+        return None
+    finally:
+        if sock:
+            sock.close()
 
-
-# Задача для перевода вызова (асинхронная задача в Celery)
+# Задача для выполнения перенаправления вызова через AMI
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
         logger.debug(f'Looking for active call for internal number {internal_number}')
         
-        channels = ari_request('GET', '/channels')  # Получаем список всех каналов
-        active_channel = next((channel for channel in channels 
-                               if channel.get('caller', {}).get('number') == internal_number), None)
+        # Получаем список сессий и ищем активный канал
+        channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+        if not channels_response:
+            raise ValueError('Cannot retrieve channels')
+
+        active_channel = None
+        for line in channels_response.splitlines():
+            if f"CallerIDNum: {internal_number}" in line:
+                # Найдена активная сессия для внутреннего номера
+                active_channel = line.split()[1]  # Предполагаем формат строки "Channel: CHANNEL_ID"
+                break
         
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}")
             raise ValueError('Active call not found')
 
+        # Определяем транк
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
 
-        logger.debug(f"Initiating new call to {transfer_to_number} through trunk '{trunk_name}'")
+        logger.debug(f"Initiating attended transfer from {internal_number} to {transfer_to_number}")
 
-        originate_data = {
-            'endpoint': f'SIP/{trunk_name}/{transfer_to_number}',
-            'extension': transfer_to_number,
-            'callerId': internal_number,
-            'context': 'from-internal',
-            'priority': 1
-        }
-
-        new_call = ari_request('POST', '/channels', json=originate_data)
-        logger.debug(f'New call initiated: {new_call["id"]}')
-
-        wait_for_channel_up(new_call['id'])
-
-        # Создаем мост для соединения обоих каналов
-        bridge_data = {'type': 'mixing'}
-        bridge = ari_request('POST', '/bridges', json=bridge_data)
-        logger.debug(f'Bridge created: {bridge["id"]}')
-        
-        ari_request('POST', f'/bridges/{bridge["id"]}/addChannel',
-                    json={'channel': [active_channel['id'], new_call['id']]})
+        # Выполняем команду Redirect (перевод активного канала)
+        redirect_command = (
+            f'Action: Redirect\r\n'
+            f'Channel: {active_channel}\r\n'
+            f'Exten: {transfer_to_number}\r\n'
+            f'Context: from-internal\r\n'
+            f'Priority: 1\r\n\r\n'
+        )
+        send_ami_command(redirect_command)
 
         return {'status': 'success', 'message': f"Attended transfer to {transfer_to_number} completed"}
 
     except ValueError as e:
         logger.error(f"Error in attended transfer for {internal_number} -> {transfer_to_number}: {str(e)}")
-        self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)}) # Исправляем, чтобы отмечать задачу проваленной
-        raise e  # Передаём реальное исключение для правильной сериализации
+        self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
+        raise e  # Передаём реальное исключение
     except Exception as e:
         logger.error(f"General error in task: {str(e)}")
-        self.update_state(
-        state='FAILURE', 
-        meta={'exc_type': type(e).__name__, 'exc_message': str(e)}
-    )
-
-        
+        self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
         raise e
-def send_dtmf_signals(channel_id, dtmf_sequence):
-    dtmf_data = {
-        'dtmf': dtmf_sequence,
-        'before': 0,    # Время до передачи сигнала
-        'duration': 100 # Длина сигнала
-    }
-    return ari_request('POST', f'/channels/{channel_id}/dtmf', json=dtmf_data).json()
 
-
-@app.route('/api/dtmf_transfer', methods=['POST'])
-def dtmf_transfer():
-    data = request.json
-    internal_number = data.get('internal_number')
-    transfer_to_number = data.get('transfer_to_number')
-    is_mobile = data.get('is_mobile', True)
-    channels = ari_request('GET', '/channels')  # Получаем список всех каналов
-    active_channel = next((channel for channel in channels 
-        if channel.get('caller', {}).get('number') == internal_number), None)
-        
-    if not active_channel:
-            logger.error(f"No active call found for number {internal_number}")
-            raise ValueError('Active call not found')
-    return send_dtmf_signals(active_channel['id'],f"*2{transfer_to_number}").json()
-    
-# Маршрут для запуска задачи
+# Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
     data = request.json
@@ -152,34 +144,48 @@ def attended_transfer():
     
     return jsonify({'task_id': task.id, 'status_url': url_for('task_status', task_id=task.id, _external=True)}), 202
 
-@app.route('/originate', methods=['GET'])
-def Originate():
-    number_from = request.args.get('from',1000)
-    number_to = request.args.get('to',302)
-    originate_data = {
-            'endpoint': f'SIP/kazakhtelecom-out/{number_to}',
-            'callerId': number_to,
-            'extension': number_from,
-            'context': 'from-internal',
-            'priority': 1
-        }
-    logger.debug(f"trying to originate call to destination number with {originate_data}")
-    new_call = ari_request(
-            'POST', '/channels', json=originate_data
-    )
-    logger.debug(f'Originate result {new_call}')
-    return jsonify(new_call)
+# Маршрут для отправки DTMF тонов через AMI
+@app.route('/api/dtmf_transfer', methods=['POST'])
+def dtmf_transfer():
+    data = request.json
+    internal_number = data.get('internal_number')
+    transfer_to_number = data.get('transfer_to_number')
+    
+    logger.debug(f"Sending DTMF *2{transfer_to_number} to {internal_number}")
 
+    # Находим активный канал для внутреннего номера
+    channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+    if not channels_response:
+        return jsonify({"error": "Cannot retrieve channels"}), 500
+
+    active_channel = None
+    for line in channels_response.splitlines():
+        if f"CallerIDNum: {internal_number}" in line:
+            active_channel = line.split()[1]  # Предполагаем формат строки "Channel: CHANNEL_ID"
+
+    if not active_channel:
+        return jsonify({"error": f"No active call found for number {internal_number}"}), 404
+    
+    # Отправляем DTMF команду через AMI
+    dtmf_command = (
+        f'Action: PlayDTMF\r\n'
+        f'Channel: {active_channel}\r\n'
+        f'DTMF: *2{transfer_to_number}\r\n\r\n'
+    )
+    response = send_ami_command(dtmf_command)
+
+    if 'Response: Success' in response:
+        return jsonify({'status': 'success', 'message': f"DTMF transfer *2{transfer_to_number} sent to {internal_number}"}), 200
+    else:
+        return jsonify({'status': 'failure', 'message': response}), 500
+
+# Маршрут для отображения каналов (CoreShowChannels)
 @app.route('/show_channels', methods=['GET'])
 def show_channels():
-    try:
-        response = ari_request('GET', '/channels')
-        channels_data = response.json()
-        return jsonify(channels_data), 200  # Возвращаем данные каналов и успешный статус
-    except requests.exceptions.HTTPError as err:
-        return jsonify({"error": str(err)}), 500  # Если ошибка - показываем её
+    response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+    return Response(response, mimetype='text/plain'), 200
 
-# Маршрут для проверки статуса задачи
+# Route for Celery task status check
 @app.route('/status/<task_id>')
 def task_status(task_id):
     task_result = celery.AsyncResult(task_id)
@@ -196,14 +202,12 @@ def task_status(task_id):
 def get_app_logs():
     LOG_FILE_PATH="app.log"
     try:
-        # Открываем и читаем файл логов
         with open(LOG_FILE_PATH, 'r') as log_file:
             logs = log_file.readlines()
-        return Response(logs, mimetype='text/plain'), 200  # Возвращаем содержимое как текст
+        return Response(logs, mimetype='text/plain'), 200
     except Exception as e:
         logger.error(f"Error reading log file: {e}")
         return jsonify({"error": f"Could not read app.log: {str(e)}"}), 500
-
 
 # -----------------------------------
 # Endpoint для отображения docker-compose logs
@@ -211,17 +215,17 @@ def get_app_logs():
 @app.route('/logs/compose', methods=['GET'])
 def get_docker_logs():
     try:
-        # Выполняем команду `docker-compose logs` для получения всех Docker-логов
         result = subprocess.run(["docker-compose", "logs"], capture_output=True, text=True)
         
         if result.returncode != 0:
             logger.error(f"Error executing docker-compose logs: {result.stderr}")
             return jsonify({"error": result.stderr.strip()}), 500
 
-        return Response(result.stdout, mimetype='text/plain'), 200  # Выводим логи в браузер
+        return Response(result.stdout, mimetype='text/plain'), 200
     except Exception as e:
         logger.error(f"Error executing docker-compose logs: {e}")
         return jsonify({"error": f"Could not run docker-compose logs: {str(e)}"}), 500
+
 if __name__ == '__main__':
     logger.debug("Starting Flask application")
     app.run(host="0.0.0.0", port=666, debug=False)
