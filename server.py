@@ -127,7 +127,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             f'Async: true\r\n'
         )
         originate_response = send_ami_command(originate_command)
-
+        logger.debug(originate_response)
         if "Response: Success" not in originate_response:
             logger.error(f"Failed to originate call to {transfer_to_number}: {originate_response}")
             raise ValueError(f"Origination failed: {originate_response}")
