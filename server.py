@@ -47,6 +47,7 @@ def send_ami_command(command):
             f'Secret: {AMI_PASSWORD}\r\n'
             f'Events: off\r\n\r\n'
         )
+        logger.info(login_command.encode())
         sock.sendall(login_command.encode())
         
         # Чтение ответа от AMI
