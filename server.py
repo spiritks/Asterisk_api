@@ -293,15 +293,15 @@ def originate_call():
             f'Async: true\r\n'
         )
     # Команда Originate для AMI
-    originate_command = (
-        f'Action: Originate\r\n'
-        f'Channel: SIP/{from_number}\r\n'  # Канал для выхода (например, через SIP)
-        f'Exten: {to_number}\r\n'          # Куда совершается вызов
-        f'Context: {context}\r\n'          # Контекст в Asterisk диалплане
-        f'Priority: {priority}\r\n'        # Приоритет вызова
-        f'CallerID: {caller_id}\r\n'       # Идентификатор звонящего (CallerID)
-        f'Async: true\r\n\r\n'             # Асинхронное выполнение
-    )
+    # originate_command = (
+    #     f'Action: Originate\r\n'
+    #     f'Channel: SIP/{from_number}\r\n'  # Канал для выхода (например, через SIP)
+    #     f'Exten: {to_number}\r\n'          # Куда совершается вызов
+    #     f'Context: {context}\r\n'          # Контекст в Asterisk диалплане
+    #     f'Priority: {priority}\r\n'        # Приоритет вызова
+    #     f'CallerID: {caller_id}\r\n'       # Идентификатор звонящего (CallerID)
+    #     f'Async: true\r\n\r\n'             # Асинхронное выполнение
+    # )
 
     # Отправляем команду на AMI
     response = send_ami_command(originate_command)
