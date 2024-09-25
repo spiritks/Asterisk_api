@@ -125,7 +125,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             f'Context: confbridge-dynamic\r\n'                     # Контекст для Conference Bridge
             f'Exten: {conference_id}\r\n'                          # Числовой идентификатор конференции
             f'Priority: 1\r\n'
-            f'CallerID: {internal_number}\r\n'                     # Caller ID инициатора перевода
+            f'CallerID: {conference_id}\r\n'                     # Caller ID инициатора перевода
             f'Async: true\r\n'
             f'\r\n'
         )
@@ -156,7 +156,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
             logger.debug(f"Ищем канал целевого абонента {channels_response}")
             for line in channels_response.splitlines():
-                if f"CallerIDNum: {transfer_to_number}" in line:
+                if f"CallerIDNum: {conference_id}" in line:
                     for chan_line in channels_response.splitlines():
                         if "Channel: " in chan_line:
                             target_channel = chan_line.split(':', 1)[1].strip()
