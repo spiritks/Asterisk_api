@@ -87,92 +87,126 @@ def send_ami_command(command):
         if sock:
             sock.close()
 
-# Задача для выполнения перенаправления вызова через AMI
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
-        logger.debug(f'Looking for active call for internal number {internal_number}')
+        logger.debug(f'Starting attended transfer for {internal_number} to {transfer_to_number}')
 
-        # 1. Получаем список каналов и ищем активный канал по CallerIDNum (абонент A)
-        channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-        if not channels_response:
-            raise ValueError('Cannot retrieve channels')
-
-        active_channel = None
-        for line in channels_response.splitlines():
-            if f"CallerIDNum: {internal_number}" in line:
-                for chan_line in channels_response.splitlines():
-                    if "Channel: " in chan_line:
-                        active_channel = chan_line.split(':', 1)[1].strip()
-                        break
-                break
-
-        if not active_channel:
-            logger.error(f"No active call found for number {internal_number}")
-            raise ValueError('Active call not found')
-
-        logger.debug(f"Active channel found for Caller ID {internal_number}: {active_channel}")
-
-        # 2. Инициируем новый вызов на целевой номер B (transfer_to_number)
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
 
-        logger.debug(f"Initiating new call to {transfer_to_number} through trunk '{trunk_name}'")
+        # 1. Создаем мост (Bridge)
+        logger.debug("Creating a new bridge")
+        bridge_command = (
+            f'Action: BridgeCreate\r\n'
+            f'Type: mixing\r\n'  # Миксирование, позволяет обоим каналам разговаривать
+            f'BridgeType: mixing\r\n'
+            f'\r\n'
+        )
 
+        bridge_response = send_ami_command(bridge_command)
+
+        # Проверяем успешность создания моста
+        if 'Response: Success' not in bridge_response:
+            logger.error(f"Failed to create bridge: {bridge_response}")
+            raise ValueError("Bridge creation failed")
+
+        # Получаем ID созданного моста
+        bridge_id = None
+        for line in bridge_response.splitlines():
+            if line.startswith("Bridge"):
+                bridge_id = line.split(":")[1].strip()
+
+        if not bridge_id:
+            logger.error("Bridge ID not found after creation")
+            raise ValueError("Bridge ID retrieval failed")
+        
+        logger.debug(f'Created bridge with ID: {bridge_id}')
+
+        # 2. Инициируем вызов на целевой номер (B)
+        logger.debug(f'Initiating call to {transfer_to_number} through trunk {trunk_name}')
+        
         originate_command = (
             f'Action: Originate\r\n'
-            f'Channel: SIP/{trunk_name}/{transfer_to_number}\r\n'
-            f'CallerID: {internal_number}\r\n'
-            f'Context: from-internal\r\n'
-            f'Priority: 1\r\n'
-            f'Async: true\r\n'
+            f'Channel: SIP/{trunk_name}/{transfer_to_number}\r\n'  # Вызов на целевой номер
+            f'Context: from-internal\r\n'                          # Контекст диалплана
+            f'Exten: {transfer_to_number}\r\n'                     # Важный параметр, куда идет вызов
+            f'Priority: 1\r\n'                                     # Приоритет обработки диалплана
+            f'Async: true\r\n'                                     # Вызов будет выполен асинхронно
+            f'\r\n'
         )
+
         originate_response = send_ami_command(originate_command)
-        logger.debug(originate_response)
-        if "Response: Success" not in originate_response:
-            logger.error(f"Failed to originate call to {transfer_to_number}: {originate_response}")
-            raise ValueError(f"Origination failed: {originate_response}")
+        logger.debug(f"Originate response: {originate_response}")
 
-        logger.debug(f"New call to {transfer_to_number} initiated: {originate_response}")
+        # Проверяем успешность выполнения команды Originate
+        if 'Response: Success' not in originate_response:
+            logger.error(f"Failed to initiate call: {originate_response}")
+            raise ValueError("Failed to originate call")
 
-        # Получаем новый канал для абонента B
-        new_channel = None
-        while not new_channel:
+        # Ждем пока целевой номер не установит звонок (мы будем добавлять его канал в мост)
+        logger.debug("Waiting for the target's channel to go 'Up'")
+
+        target_channel = None
+        while not target_channel:
             channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
             for line in channels_response.splitlines():
                 if f"CallerIDNum: {transfer_to_number}" in line:
                     for chan_line in channels_response.splitlines():
                         if "Channel: " in chan_line:
-                            new_channel = chan_line.split(':', 1)[1].strip()
+                            target_channel = chan_line.split(':', 1)[1].strip()
                             break
-            if not new_channel:
-                time.sleep(1)  # Ждем, пока соединение будет установлено
-        logger.debug(f"New channel for {transfer_to_number} found: {new_channel}")
+            if not target_channel:
+                time.sleep(1)  # Ждем секунду и повоторяем запрос
 
-        # 3. Ждем, пока новый вызов не перейдет в состояние "Up"
-        while True:
-            channel_status = send_ami_command(f'Action: Status\r\nChannel: {new_channel}\r\n\r\n')
-            if 'ChannelStateDesc: Up' in channel_status:
-                break
-            time.sleep(1)
-
-        logger.debug(f"Call to {transfer_to_number} is now Up. Proceeding with transfer.")
-
-        # 4. Создаем мост (Bridge) и добавляем оба канала (A и B)
-        logger.debug(f"Creating bridge to connect {internal_number} and {transfer_to_number}")
-        bridge_command = (
-            f'Action: Bridge\r\n'
-            f'BridgeUniqueid: {internal_number}_{transfer_to_number}_bridge\r\n'
-            f'BridgeType: mixing\r\n'
-            f'Channel: {active_channel},{new_channel}\r\n\r\n'
+        # 3. Добавляем канал целевого номера в мост
+        logger.debug(f"Adding target's channel {target_channel} to bridge {bridge_id}")
+        add_channel_command_b = (
+            f'Action: BridgeAddChannel\r\n'
+            f'BridgeUniqueid: {bridge_id}\r\n'
+            f'Channel: {target_channel}\r\n'
+            f'\r\n'
         )
-        bridge_response = send_ami_command(bridge_command)
 
-        if "Response: Success" in bridge_response:
-            logger.debug(f"Bridge created successfully, channels connected.")
-        else:
-            logger.error(f"Failed to create bridge: {bridge_response}")
-            raise ValueError(f"Bridge failed: {bridge_response}")
+        add_b_response = send_ami_command(add_channel_command_b)
+        logger.debug(f"Add channel to bridge response: {add_b_response}")
 
+        if 'Response: Success' not in add_b_response:
+            logger.error(f"Failed to add target's channel to bridge: {add_b_response}")
+            raise ValueError("Failed to add target channel to bridge")
+
+        # 4. Теперь ищем активный канал инициатора (A)
+        logger.debug(f"Looking for active call for internal number {internal_number}")
+
+        active_channel = None
+        while not active_channel:
+            channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+            for line in channels_response.splitlines():
+                if f"CallerIDNum: {internal_number}" in line:
+                    for chan_line in channels_response.splitlines():
+                        if "Channel: " in chan_line:
+                            active_channel = chan_line.split(':', 1)[1].strip()
+                            break
+            if not active_channel:
+                time.sleep(1)
+
+        # 5. Добавляем активный канал инициатора в мост
+        logger.debug(f"Adding initiator's channel {active_channel} to bridge {bridge_id}")
+        add_channel_command_a = (
+            f'Action: BridgeAddChannel\r\n'
+            f'BridgeUniqueid: {bridge_id}\r\n'
+            f'Channel: {active_channel}\r\n'
+            f'\r\n'
+        )
+
+        add_a_response = send_ami_command(add_channel_command_a)
+        logger.debug(f"Add initiator's channel to bridge response: {add_a_response}")
+
+        if 'Response: Success' not in add_a_response:
+            logger.error(f"Failed to add initiator's channel to bridge: {add_a_response}")
+            raise ValueError("Failed to add initiator channel to bridge")
+
+        logger.debug(f"Attended transfer complete. Both parties connected in bridge {bridge_id}")
+        
         return {'status': 'success', 'message': f"Attended transfer to {transfer_to_number} completed"}
 
     except ValueError as e:
@@ -182,11 +216,12 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
     except Exception as e:
         logger.error(f"General error in attended transfer task: {str(e)}")
         self.update_state(
-            state='FAILURE',
+            state='FAILURE', 
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
         )
         raise e
-
+    
+    
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
