@@ -51,7 +51,7 @@ def send_ami_command(command):
             f'Secret: {AMI_PASSWORD}\r\n'
             f'Events: off\r\n\r\n'
         )
-        logger.info(login_command.encode())
+        # logger.info(login_command.encode())
         sock.sendall(login_command.encode())
         
         # Чтение ответа от AMI
@@ -279,7 +279,19 @@ def originate_call():
 
     if not from_number or not to_number:
         return jsonify({"error": "Missing 'from' or 'to' parameter"}), 400
+    trunk_name = 'kazakhtelecom-out'
 
+    logger.debug(f"Initiating new call to {to_number} through trunk '{trunk_name}'")
+
+    originate_command = (
+            f'Action: Originate\r\n'
+            f'Channel: SIP/{trunk_name}/{to_number}\r\n'
+            # f'CallerID: {from_number}\r\n'
+            f'Exten: {from_number}\r\n'
+            f'Context: from-internal\r\n'
+            f'Priority: 1\r\n'
+            f'Async: true\r\n'
+        )
     # Команда Originate для AMI
     originate_command = (
         f'Action: Originate\r\n'
