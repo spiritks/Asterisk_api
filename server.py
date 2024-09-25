@@ -72,12 +72,12 @@ def send_ami_command(command):
             return None
 
         # Отправляем команду
-        logger.debug(f"Sending AMI command: {command}")
+        # logger.debug(f"Sending AMI command: {command}")
         sock.sendall(command.encode())
         
         # Получаем ответ на нашу команду
         response = recv_response()
-        logger.debug(f"AMI Response: {response}")
+        # logger.debug(f"AMI Response: {response}")
         
         return response
     except Exception as e:
@@ -87,35 +87,36 @@ def send_ami_command(command):
         if sock:
             sock.close()
 
-
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
-        # Проверяем наличие активного канала инициатора (A)
+        # 1. Проверяем наличие активного канала инициатора (A)
         logger.debug(f"Checking active channel for initiator {internal_number}")
         
+        # Проверяем активный канал инициатора
         active_channel = None
-        
         channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
         for line in channels_response.splitlines():
-                if f"CallerIDNum: {internal_number}" in line:
-                    for chan_line in channels_response.splitlines():
-                        if "Channel: " in chan_line:
-                            active_channel = chan_line.split(':', 1)[1].strip()
-                            break
-        if not active_channel:
-                logger.error(f"No active call found for number {internal_number}")
-                raise ValueError(f"No active call found for initiator {internal_number}")
+            if f"CallerIDNum: {internal_number}" in line:
+                for chan_line in channels_response.splitlines():
+                    if "Channel: " in chan_line:
+                        active_channel = chan_line.split(':', 1)[1].strip()
+                        break
 
+        # Если активный канал инициатора не найден, завершаем задачу
+        if not active_channel:
+            logger.error(f"No active call found for number {internal_number}. Aborting transfer.")
+            raise ValueError(f"No active call found for initiator {internal_number}")
+        
         logger.debug(f"Active call found for initiator {internal_number}: {active_channel}")
 
-        # Генерируем уникальный числовой идентификатор конференции на основе текущей временной метки (timestamp)
+        # 2. Генерируем уникальный числовой идентификатор конференции на основе текущей временной метки (timestamp)
         conference_id = str(int(time.time()))  # Например: '1632590121'
         logger.debug(f'Starting attended transfer for {internal_number} to {transfer_to_number}, using conference ID: {conference_id}')
 
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
 
-        # Инициируем звонок целевому абоненту, направляя его в контекст с конференцией ConfBridge
+        # 3. Инициируем звонок целевому абоненту, направляя его в контекст с конференцией ConfBridge
         logger.debug(f'Initiating call to {transfer_to_number} through trunk {trunk_name} into conference {conference_id}')
 
         originate_command_b = (
@@ -134,14 +135,24 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
 
         if 'Response: Success' not in originate_response_b:
             logger.error(f"Failed to initiate call for target: {originate_response_b}")
-            raise ValueError("Failed to originate call for target")
+            raise ValueError("Failed to initiate call for target")
 
-        # Ждем, пока целевой номер не подключится
-        logger.debug("Waiting for the target's channel to go 'Up'")
+        # 4. Ждем, пока целевой номер не подключится — максимум 120 секунд
+        logger.debug("Waiting for the target's channel to go 'Up' (timeout: 120 seconds)")
 
         target_channel = None
+        start_time = time.time()  # Запоминаем момент старта ожидания
+        timeout = 120  # Установим тайм-аут ожидания в секундах
+
         while not target_channel:
-            # Шаг 1: Найти канал целевого абонента
+            elapsed_time = time.time() - start_time   # Рассчитываем, сколько времени прошло
+
+            # Если прошло больше 120 секунд, прекращаем попытку
+            if elapsed_time > timeout:
+                logger.error(f"Timeout reached: 120 seconds waiting for target {transfer_to_number} to answer.")
+                raise TimeoutError(f"Target {transfer_to_number} did not answer within 120 seconds.")
+
+            # Найдем канал целевого абонента (B)
             channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
             for line in channels_response.splitlines():
                 if f"CallerIDNum: {transfer_to_number}" in line:
@@ -151,48 +162,51 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
                             break
             
             if target_channel:
-                # Шаг 2: Проверить состояние целевого канала
+                # Проверить состояние целевого канала (Up или нет)
                 channel_status_response = send_ami_command(f'Action: Status\r\nChannel: {target_channel}\r\n\r\n')
                 
                 channel_up = False
                 for line in channel_status_response.splitlines():
-                    if "ChannelStateDesc: Up" in line:  # Если канал достиг статуса "Up"
+                    if "ChannelStateDesc: Up" in line:  # Если канал поднят
                         channel_up = True
                         break
 
                 if channel_up:
-                    logger.debug(f"Target channel {target_channel} is 'Up'")
+                    logger.debug(f"Target channel {target_channel} is 'Up'. Proceeding with transfer.")
                 else:
                     logger.debug(f"Target channel {target_channel} not 'Up' yet. Rechecking...")
-                    target_channel = None  # Сбрасываем, так как статус канала еще не Up
+                    target_channel = None  # Сбрасываем, если статус канала еще не "Up"
             
-            if not target_channel:  # Если канал не найден или статус канала еще не "Up"
-                time.sleep(1)  # Ждем и повторяем запрос
+            if not target_channel:
+                time.sleep(1)  # Ждем 1 секунду и повторяем процесс
 
-        # Теперь добавляем инициатора в конференцию
-        logger.debug(f"Adding initiator's channel {active_channel} to conference with ID {conference_id}")
+        # 5. Переносим инициатора (A) в конференцию с использованием команды Redirect, так как канал уже создан
+        logger.debug(f"Transferring initiator's channel {active_channel} to conference with ID {conference_id} via Redirect")
 
-        originate_command_a = (
-            f'Action: Originate\r\n'
-            f'Channel: {active_channel}\r\n'                         # Канал инициатора для добавления в конференцию
-            f'Context: confbridge-dynamic\r\n'                       # Контекст для Conference Bridge
+        redirect_command = (
+            f'Action: Redirect\r\n'
+            f'Channel: {active_channel}\r\n'                         # Канал инициатора
+            f'Context: confbridge-dynamic\r\n'                       # Контекст Conference Bridge
             f'Exten: {conference_id}\r\n'                            # Числовой идентификатор конференции
             f'Priority: 1\r\n'
-            f'Async: true\r\n'
             f'\r\n'
         )
 
-        originate_response_a = send_ami_command(originate_command_a)
-        logger.debug(f"Originate response for initiator: {originate_response_a}")
+        redirect_response = send_ami_command(redirect_command)
+        logger.debug(f"Redirect response for initiator: {redirect_response}")
 
-        if 'Response: Success' not in originate_response_a:
-            logger.error(f"Failed to add initiator to conference: {originate_response_a}")
-            raise ValueError("Failed to originate call for initiator")
+        if 'Response: Success' not in redirect_response:
+            logger.error(f"Failed to redirect initiator to conference: {redirect_response}")
+            raise ValueError("Failed to redirect initiator channel to conference")
 
         logger.debug(f"Attended transfer complete. Both parties are now in conference room {conference_id}")
 
         return {'status': 'success', 'message': f"Attended transfer to {transfer_to_number} completed"}
 
+    except TimeoutError as te:
+        logger.error(str(te))
+        self.update_state(state='FAILURE', meta={'exc_type': 'TimeoutError', 'exc_message': str(te)})
+        raise te
     except ValueError as e:
         logger.error(f"Error in attended transfer for {internal_number} -> {transfer_to_number}: {str(e)}")
         self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
@@ -204,8 +218,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
         )
         raise e
-
-
+    
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
