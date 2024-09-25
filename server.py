@@ -154,11 +154,13 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
 
             # Найдем канал целевого абонента (B)
             channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+            logger.debug(f"Ищем канал целевого абонента {channels_response}")
             for line in channels_response.splitlines():
                 if f"CallerIDNum: {transfer_to_number}" in line:
                     for chan_line in channels_response.splitlines():
                         if "Channel: " in chan_line:
                             target_channel = chan_line.split(':', 1)[1].strip()
+                            
                             break
             
             if target_channel:
