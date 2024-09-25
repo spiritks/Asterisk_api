@@ -87,63 +87,39 @@ def send_ami_command(command):
         if sock:
             sock.close()
 
+import uuid  # Для генерации уникальных ID сессий
+
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
-        logger.debug(f'Starting attended transfer for {internal_number} to {transfer_to_number}')
+        # Генерируем уникальный идентификатор для этой конференции
+        conference_id = str(uuid.uuid4())  # Уникальный ID для каждой сессии передачи
+        logger.debug(f'Starting attended transfer for {internal_number} to {transfer_to_number}, using conference ID: {conference_id}')
 
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
 
-        # 1. Создаем мост (Bridge)
-        logger.debug("Creating a new bridge")
-        bridge_command = (
-            f'Action: BridgeCreate\r\n'
-            f'Type: mixing\r\n'  # Миксирование, позволяет обоим каналам разговаривать
-            f'BridgeType: mixing\r\n'
-            f'\r\n'
-        )
+        # 1. Инициируем вызов на целевой номер (B), направляя его в конференцию dengan уникальным ID
+        logger.debug(f'Initiating call to {transfer_to_number} through trunk {trunk_name} into conference {conference_id}')
 
-        bridge_response = send_ami_command(bridge_command)
-
-        # Проверяем успешность создания моста
-        if 'Response: Success' not in bridge_response:
-            logger.error(f"Failed to create bridge: {bridge_response}")
-            raise ValueError("Bridge creation failed")
-
-        # Получаем ID созданного моста
-        bridge_id = None
-        for line in bridge_response.splitlines():
-            if line.startswith("Bridge"):
-                bridge_id = line.split(":")[1].strip()
-
-        if not bridge_id:
-            logger.error("Bridge ID not found after creation")
-            raise ValueError("Bridge ID retrieval failed")
-        
-        logger.debug(f'Created bridge with ID: {bridge_id}')
-
-        # 2. Инициируем вызов на целевой номер (B)
-        logger.debug(f'Initiating call to {transfer_to_number} through trunk {trunk_name}')
-        
-        originate_command = (
+        originate_command_b = (
             f'Action: Originate\r\n'
-            f'Channel: SIP/{trunk_name}/{transfer_to_number}\r\n'  # Вызов на целевой номер
-            f'Context: from-internal\r\n'                          # Контекст диалплана
-            f'Exten: {transfer_to_number}\r\n'                     # Важный параметр, куда идет вызов
-            f'Priority: 1\r\n'                                     # Приоритет обработки диалплана
-            f'Async: true\r\n'                                     # Вызов будет выполен асинхронно
+            f'Channel: SIP/{trunk_name}/{transfer_to_number}\r\n'  # Внешний номер через SIP-транк
+            f'Context: confbridge-dynamic\r\n'                     # Контекст с динамическими конференциями
+            f'Exten: {conference_id}\r\n'                          # Уникальный ID конференции для этого вызова
+            f'Priority: 1\r\n'
+            f'CallerID: {internal_number}\r\n'                     # Caller ID (инициатора перевода)
+            f'Async: true\r\n'
             f'\r\n'
         )
 
-        originate_response = send_ami_command(originate_command)
-        logger.debug(f"Originate response: {originate_response}")
+        originate_response_b = send_ami_command(originate_command_b)
+        logger.debug(f"Originate response for target: {originate_response_b}")
 
-        # Проверяем успешность выполнения команды Originate
-        if 'Response: Success' not in originate_response:
-            logger.error(f"Failed to initiate call: {originate_response}")
-            raise ValueError("Failed to originate call")
+        if 'Response: Success' not in originate_response_b:
+            logger.error(f"Failed to initiate call for target: {originate_response_b}")
+            raise ValueError("Failed to originate call for target")
 
-        # Ждем пока целевой номер не установит звонок (мы будем добавлять его канал в мост)
+        # Ждем, пока целевой номер не подключится
         logger.debug("Waiting for the target's channel to go 'Up'")
 
         target_channel = None
@@ -156,25 +132,9 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
                             target_channel = chan_line.split(':', 1)[1].strip()
                             break
             if not target_channel:
-                time.sleep(1)  # Ждем секунду и повоторяем запрос
+                time.sleep(1)
 
-        # 3. Добавляем канал целевого номера в мост
-        logger.debug(f"Adding target's channel {target_channel} to bridge {bridge_id}")
-        add_channel_command_b = (
-            f'Action: BridgeAddChannel\r\n'
-            f'BridgeUniqueid: {bridge_id}\r\n'
-            f'Channel: {target_channel}\r\n'
-            f'\r\n'
-        )
-
-        add_b_response = send_ami_command(add_channel_command_b)
-        logger.debug(f"Add channel to bridge response: {add_b_response}")
-
-        if 'Response: Success' not in add_b_response:
-            logger.error(f"Failed to add target's channel to bridge: {add_b_response}")
-            raise ValueError("Failed to add target channel to bridge")
-
-        # 4. Теперь ищем активный канал инициатора (A)
+        # 3. Теперь ищем канал инициатора (A) и направляем его в ту же конференцию
         logger.debug(f"Looking for active call for internal number {internal_number}")
 
         active_channel = None
@@ -189,24 +149,28 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             if not active_channel:
                 time.sleep(1)
 
-        # 5. Добавляем активный канал инициатора в мост
-        logger.debug(f"Adding initiator's channel {active_channel} to bridge {bridge_id}")
-        add_channel_command_a = (
-            f'Action: BridgeAddChannel\r\n'
-            f'BridgeUniqueid: {bridge_id}\r\n'
-            f'Channel: {active_channel}\r\n'
+        # 4. Добавляем канал инициатора в динамическую конференцию
+        logger.debug(f"Adding initiator's channel {active_channel} to conference with ID {conference_id}")
+
+        originate_command_a = (
+            f'Action: Originate\r\n'
+            f'Channel: {active_channel}\r\n'                         # Канал инициатора
+            f'Context: confbridge-dynamic\r\n'                       # Контекст с ConfBridge
+            f'Exten: {conference_id}\r\n'                            # Тот же ID конференции
+            f'Priority: 1\r\n'
+            f'Async: true\r\n'
             f'\r\n'
         )
 
-        add_a_response = send_ami_command(add_channel_command_a)
-        logger.debug(f"Add initiator's channel to bridge response: {add_a_response}")
+        originate_response_a = send_ami_command(originate_command_a)
+        logger.debug(f"Originate response for initiator: {originate_response_a}")
 
-        if 'Response: Success' not in add_a_response:
-            logger.error(f"Failed to add initiator's channel to bridge: {add_a_response}")
-            raise ValueError("Failed to add initiator channel to bridge")
+        if 'Response: Success' not in originate_response_a:
+            logger.error(f"Failed to add initiator to conference: {originate_response_a}")
+            raise ValueError("Failed to originate call for initiator")
 
-        logger.debug(f"Attended transfer complete. Both parties connected in bridge {bridge_id}")
-        
+        logger.debug(f"Attended transfer complete. Both parties are now in conference room {conference_id}.")
+
         return {'status': 'success', 'message': f"Attended transfer to {transfer_to_number} completed"}
 
     except ValueError as e:
@@ -220,7 +184,6 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
         )
         raise e
-    
     
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
