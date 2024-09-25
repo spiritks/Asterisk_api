@@ -88,26 +88,43 @@ def send_ami_command(command):
             sock.close()
 
 
-
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
-        # Генерируем уникальный идентификатор для этой конференции
-        conference_id = str(int(time.time()))
+        # 1. Проверяем наличие активного канала инициатора (A)
+        logger.debug(f"Checking active channel for initiator {internal_number}")
+        
+        active_channel = None
+        while not active_channel:
+            channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+            for line in channels_response.splitlines():
+                if f"CallerIDNum: {internal_number}" in line:
+                    for chan_line in channels_response.splitlines():
+                        if "Channel: " in chan_line:
+                            active_channel = chan_line.split(':', 1)[1].strip()
+                            break
+            if not active_channel:
+                logger.error(f"No active call found for number {internal_number}")
+                raise ValueError(f"No active call found for initiator {internal_number}")
+
+        logger.debug(f"Active call found for initiator {internal_number}: {active_channel}")
+
+        # 2. Генерируем уникальный числовой идентификатор конференции на основе текущей временной метки (timestamp)
+        conference_id = str(int(time.time()))  # Например: '1632590121'
         logger.debug(f'Starting attended transfer for {internal_number} to {transfer_to_number}, using conference ID: {conference_id}')
 
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
 
-        # 1. Инициируем вызов на целевой номер (B), направляя его в конференцию dengan уникальным ID
+        # 3. Инициируем звонок целевому абоненту, направляя его в контекст с конференцией ConfBridge
         logger.debug(f'Initiating call to {transfer_to_number} through trunk {trunk_name} into conference {conference_id}')
 
         originate_command_b = (
             f'Action: Originate\r\n'
-            f'Channel: SIP/{trunk_name}/{transfer_to_number}\r\n'  # Внешний номер через SIP-транк
-            f'Context: confbridge-dynamic\r\n'                     # Контекст с динамическими конференциями
-            f'Exten: {conference_id}\r\n'                          # Уникальный ID конференции для этого вызова
+            f'Channel: SIP/{trunk_name}/{transfer_to_number}\r\n'  # Вызов на целевой номер
+            f'Context: confbridge-dynamic\r\n'                     # Контекст для Conference Bridge
+            f'Exten: {conference_id}\r\n'                          # Числовой идентификатор конференции
             f'Priority: 1\r\n'
-            f'CallerID: {internal_number}\r\n'                     # Caller ID (инициатора перевода)
+            f'CallerID: {internal_number}\r\n'                     # Caller ID инициатора перевода
             f'Async: true\r\n'
             f'\r\n'
         )
@@ -119,7 +136,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             logger.error(f"Failed to initiate call for target: {originate_response_b}")
             raise ValueError("Failed to originate call for target")
 
-        # Ждем, пока целевой номер не подключится
+        # 4. Ждем, пока целевой номер не подключится
         logger.debug("Waiting for the target's channel to go 'Up'")
 
         target_channel = None
@@ -132,31 +149,16 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
                             target_channel = chan_line.split(':', 1)[1].strip()
                             break
             if not target_channel:
-                time.sleep(1)
+                time.sleep(1)  # Ждем и повторяем запрос
 
-        # 3. Теперь ищем канал инициатора (A) и направляем его в ту же конференцию
-        logger.debug(f"Looking for active call for internal number {internal_number}")
-
-        active_channel = None
-        while not active_channel:
-            channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-            for line in channels_response.splitlines():
-                if f"CallerIDNum: {internal_number}" in line:
-                    for chan_line in channels_response.splitlines():
-                        if "Channel: " in chan_line:
-                            active_channel = chan_line.split(':', 1)[1].strip()
-                            break
-            if not active_channel:
-                time.sleep(1)
-
-        # 4. Добавляем канал инициатора в динамическую конференцию
+        # 5. Добавляем инициатора (A) в конференцию
         logger.debug(f"Adding initiator's channel {active_channel} to conference with ID {conference_id}")
 
         originate_command_a = (
             f'Action: Originate\r\n'
-            f'Channel: {active_channel}\r\n'                         # Канал инициатора
-            f'Context: confbridge-dynamic\r\n'                       # Контекст с ConfBridge
-            f'Exten: {conference_id}\r\n'                            # Тот же ID конференции
+            f'Channel: {active_channel}\r\n'                         # Канал инициатора для добавления в конференцию
+            f'Context: confbridge-dynamic\r\n'                       # Контекст для Conference Bridge
+            f'Exten: {conference_id}\r\n'                            # Числовой идентификатор конференции
             f'Priority: 1\r\n'
             f'Async: true\r\n'
             f'\r\n'
@@ -169,7 +171,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             logger.error(f"Failed to add initiator to conference: {originate_response_a}")
             raise ValueError("Failed to originate call for initiator")
 
-        logger.debug(f"Attended transfer complete. Both parties are now in conference room {conference_id}.")
+        logger.debug(f"Attended transfer complete. Both parties are now in conference room {conference_id}")
 
         return {'status': 'success', 'message': f"Attended transfer to {transfer_to_number} completed"}
 
@@ -184,7 +186,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
         )
         raise e
-    
+
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
