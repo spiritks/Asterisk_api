@@ -283,15 +283,17 @@ def originate_call():
 
     logger.debug(f"Initiating new call to {to_number} through trunk '{trunk_name}'")
 
+    # Формируем команду Originate для AMI
     originate_command = (
-            f'Action: Originate\r\n'
-            f'Channel: SIP/{trunk_name}/{to_number}\r\n'
-            # f'CallerID: {from_number}\r\n'
-            f'Exten: {from_number}\r\n'
-            f'Context: from-internal\r\n'
-            f'Priority: 1\r\n'
-            f'Async: true\r\n'
-        )
+        f'Action: Originate\r\n'
+        f'Channel: SIP/kazakhtelecom-out/{to_number}\r\n'  # Внешний номер через SIP-транк
+        f'Exten: {from_number}\r\n'                        # Внутренний номер (куда звонить в контексте)
+        f'Context: {context}\r\n'                          # Контекст диалплана (например, from-internal)
+        f'Priority: {priority}\r\n'                        # Приоритет в диалплане
+        f'CallerID: {caller_id}\r\n'                       # CallerID звонящего (например, 1000)
+        f'Async: true\r\n'                                 # Асинхронный вызов
+        f'\r\n'
+    )
     # Команда Originate для AMI
     # originate_command = (
     #     f'Action: Originate\r\n'
