@@ -87,13 +87,13 @@ def send_ami_command(command):
         if sock:
             sock.close()
 
-import uuid  # Для генерации уникальных ID сессий
+
 
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
         # Генерируем уникальный идентификатор для этой конференции
-        conference_id = str(uuid.uuid4())  # Уникальный ID для каждой сессии передачи
+        conference_id = str(int(time.time()))
         logger.debug(f'Starting attended transfer for {internal_number} to {transfer_to_number}, using conference ID: {conference_id}')
 
         trunk_name = 'kazakhtelecom-out' if is_mobile else 'from-internal'
