@@ -347,7 +347,10 @@ def originate_call():
     else:
         logger.error(f"Failed to initiate call: {response}")
         return jsonify({"error": "Failed to initiate call", "response": response}), 500
-
+@app.route('/listbridges', methods=['get'])
+def listBridges():
+    bridges_response = send_ami_command('Action: BridgeList\r\n\r\n')
+    return bridges_response
 if __name__ == '__main__':
     logger.debug("Starting Flask application")
     app.run(host="0.0.0.0", port=666, debug=False)
