@@ -101,7 +101,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
 
         # Получаем список активных каналов
         channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-
+        logger.debug(f"Active channels: {channels_response.splitlines()}")
         # Находим канал инициатора (A) и его connected client (B)
         for line in channels_response.splitlines():
             if f"CallerIDNum: {internal_number}" in line:  # Канал инициатора (A)
