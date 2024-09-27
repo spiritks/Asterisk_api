@@ -101,15 +101,16 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
 
         # Получаем список активных каналов
         channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-        logger.debug(f"Active channels: {channels_response.splitlines()}")
-        # Находим канал инициатора (A) и его connected client (B)
+        logger.debug(f"Active channels {channels_response.splitlines()}")
+        # Находим канал инициатора (A) и его connected client (B) или партнера по звонку
         for line in channels_response.splitlines():
-            if f"CallerIDNum: {internal_number}" in line:  # Канал инициатора (A)
+            # Ищем канал инициатора (A), который может быть в виде Local/ или SIP/
+            if f"CallerIDNum: {internal_number}" in line:
                 for chan_line in channels_response.splitlines():
                     if "Channel: " in chan_line:
-                        active_channel_a = chan_line.split(':', 1)[1].strip()  # Сохраняем канал А
+                        active_channel_a = chan_line.split(':', 1)[1].strip()  # Сохраняем канал A
 
-                    if "ConnectedLineNum:" in line:  # Номер клиента B, с которым говорит A
+                    if "ConnectedLineNum:" in line and "<unknown>" not in line:  # Номер клиента (клиент B)
                         client_number = line.split(':', 1)[1].strip()
 
                         logger.debug(f"Found client number: {client_number}")
@@ -117,12 +118,12 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
 
         # Если канал инициатора не найден, завершить выполнение с ошибкой
         if not active_channel_a:
-            logger.error(f"No active call found for number {internal_number}")
+            logger.error(f"No active call found for initiator {internal_number}")
             raise ValueError(f"No active call found for number {internal_number}")
 
         # Если клиент (B) не найден, завершить выполнение с ошибкой
         if not client_number:
-            logger.error(f"No connected client (B) found for initiator {internal_number}")
+            logger.error(f"No connected client found for initiator {internal_number}")
             raise ValueError(f"No connected client found for number {internal_number}")
 
         # Найти канал клиента (B) по его номеру
