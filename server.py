@@ -87,48 +87,66 @@ def send_ami_command(command):
         if sock:
             sock.close()
 
+import time  # Для отслеживания времени
+
 @celery.task(bind=True, name='app.attended_transfer_task')
-def attended_transfer_task(self, internal_number, client_number, transfer_to_number, is_mobile):
+def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
-        # Шаг 1: Найти активные каналы для A и B
-        logger.debug(f"Looking for active channels for initiator {internal_number} and client {client_number}")
+        # Шаг 1: Найти активный канал для инициатора (A) и получить номер клиента (B)
+        logger.debug(f"Looking for active channel for initiator {internal_number} and finding client number")
 
         active_channel_a = None
-        active_channel_b = None
+        client_number = None
+        client_channel = None
 
         # Получаем список активных каналов
         channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-        logger.debug(f"Active channels: {channels_response.splitlines()}")
-        # Ищем каналы для инициатора (A) и клиента (B)
+
+        # Находим канал инициатора (A) и его connected client (B)
         for line in channels_response.splitlines():
             if f"CallerIDNum: {internal_number}" in line:  # Канал инициатора (A)
                 for chan_line in channels_response.splitlines():
                     if "Channel: " in chan_line:
-                        active_channel_a = chan_line.split(':', 1)[1].strip()  # Сохраняем канал A
-                        break
-            if f"CallerIDNum: {client_number}" in line:  # Канал клиента (B)
-                for chan_line in channels_response.splitlines():
-                    if "Channel: " in chan_line:
-                        active_channel_b = chan_line.split(':', 1)[1].strip()  # Сохраняем канал B
+                        active_channel_a = chan_line.split(':', 1)[1].strip()  # Сохраняем канал А
+
+                    if "ConnectedLineNum:" in line:  # Номер клиента B, с которым говорит A
+                        client_number = line.split(':', 1)[1].strip()
+
+                        logger.debug(f"Found client number: {client_number}")
                         break
 
-        # Если один из каналов не найден, завершаем выполнение
+        # Если канал инициатора не найден, завершить выполнение с ошибкой
         if not active_channel_a:
-            logger.error(f"No active call found for initiator {internal_number}")
-            raise ValueError(f"No active call found for initiator {internal_number}")
-        if not active_channel_b:
+            logger.error(f"No active call found for number {internal_number}")
+            raise ValueError(f"No active call found for number {internal_number}")
+
+        # Если клиент (B) не найден, завершить выполнение с ошибкой
+        if not client_number:
+            logger.error(f"No connected client (B) found for initiator {internal_number}")
+            raise ValueError(f"No connected client found for number {internal_number}")
+
+        # Найти канал клиента (B) по его номеру
+        for line in channels_response.splitlines():
+            if f"CallerIDNum: {client_number}" in line:
+                for chan_line in channels_response.splitlines():
+                    if "Channel: " in chan_line:
+                        client_channel = chan_line.split(':', 1)[1].strip()
+                        break
+
+        # Если канал клиента не найден, завершить выполнение с ошибкой
+        if not client_channel:
             logger.error(f"No active call found for client {client_number}")
             raise ValueError(f"No active call found for client {client_number}")
 
-        logger.debug(f"Active channels found - A: {active_channel_a}, B: {active_channel_b}")
+        logger.debug(f"Active channels found - A: {active_channel_a}, B (client): {client_channel}")
 
-        # Шаг 2: Соединяем каналы A и B с использованием команды `Bridge`
-        logger.debug(f"Bridging channels {active_channel_a} (A) and {active_channel_b} (B)")
+        # Шаг 2: Объединяем каналы A и B с использованием команды `Bridge`
+        logger.debug(f"Bridging channels {active_channel_a} (A) and {client_channel} (B - client)")
 
         bridge_command = (
             f'Action: Bridge\r\n'
             f'Channel1: {active_channel_a}\r\n'
-            f'Channel2: {active_channel_b}\r\n'
+            f'Channel2: {client_channel}\r\n'
             f'\r\n'
         )
 
@@ -141,14 +159,14 @@ def attended_transfer_task(self, internal_number, client_number, transfer_to_num
         logger.debug(f"Channels A and B successfully bridged")
 
         # Шаг 3: Найти созданный мост (Bridge) через `BridgeList` для получения BridgeUniqueid
-        logger.debug(f"Listing bridges to find the one containing channels {active_channel_a} and {active_channel_b}")
+        logger.debug(f"Listing bridges to find the one containing channels {active_channel_a} and {client_channel}")
 
         bridge_list_response = send_ami_command('Action: BridgeList\r\n\r\n')
         bridge_id = None
 
-        # Проверяем список бри́джей для нахождения нашего
+        # Проверяем список бри́джей для нахождения нашего (с существующими каналами A и B)
         for line in bridge_list_response.splitlines():
-            if f"Channel: {active_channel_a}" in line or f"Channel: {active_channel_b}" in line:
+            if f"Channel: {active_channel_a}" in line or f"Channel: {client_channel}" in line:
                 for bridge_line in bridge_list_response.splitlines():
                     if "BridgeUniqueid: " in bridge_line:
                         bridge_id = bridge_line.split(":")[1].strip()
@@ -156,14 +174,14 @@ def attended_transfer_task(self, internal_number, client_number, transfer_to_num
             if bridge_id:
                 break
 
-        # Если активный мост не найден, выдаем ошибку
+        # Если активный мост не найден, выдать ошибку
         if not bridge_id:
             logger.error(f"Bridge not found after bridging channels A and B.")
             raise ValueError("Bridge ID retrieval failed after bridging A and B")
 
         logger.debug(f"Bridge found with ID: {bridge_id}")
 
-        # Шаг 4: Инициируем звонок на абонента С и добавляем его в определенный мост (бры́дж)
+        # Шаг 4: Инициируем звонок на абонента С
         logger.debug(f'Initiating call to {transfer_to_number} through trunk {("kazakhtelecom-out" if is_mobile else "from-internal")}')
 
         originate_command = (
@@ -184,7 +202,7 @@ def attended_transfer_task(self, internal_number, client_number, transfer_to_num
             logger.error(f"Failed to initiate call for target: {originate_response}")
             raise ValueError("Failed to originate call for target (C)")
 
-        # Ждем пока абонент C не поднимет трубку
+        # Ждем пока абонент C не ответит
         logger.debug(f"Waiting for target ({transfer_to_number}) to answer")
 
         target_channel = None
@@ -197,7 +215,7 @@ def attended_transfer_task(self, internal_number, client_number, transfer_to_num
                 logger.error(f"Timed out waiting for target {transfer_to_number} to answer.")
                 raise TimeoutError(f"Target {transfer_to_number} did not answer within {TIMEOUT} seconds.")
 
-            # Найдем канал абонента C
+            # Находим канал абонента C
             channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
             for line in channels_response.splitlines():
                 if f"CallerIDNum: {transfer_to_number}" in line:
@@ -257,6 +275,7 @@ def attended_transfer_task(self, internal_number, client_number, transfer_to_num
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
         )
         raise e
+
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
 def attended_transfer():
