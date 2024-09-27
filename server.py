@@ -155,8 +155,8 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         originate_command = (
         f'Action: Originate\r\n'
         f'Channel: SIP/kazakhtelecom-out/{transfer_to_number}\r\n'  # Вызов на целевой номер C
-        f'Context: from-internal\r\n'
-        f'Exten: {transfer_to_number}\r\n'  
+        # f'Context: from-internal\r\n'
+        # f'Exten: {transfer_to_number}\r\n'  
         f'Priority: 1\r\n'
         f'CallerID: {internal_number}\r\n'
         f'Async: true\r\n'
