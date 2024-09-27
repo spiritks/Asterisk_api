@@ -90,102 +90,66 @@ def send_ami_command(command):
         if sock:
             sock.close()
             
-import time  # Для отслеживания времени
+# import time  # Для отслеживания времени
+# import logging
+
+# logger = logging.getLogger(__name__)
+
+TIMEOUT = 60  # Тайм-аут для ожидания
 
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
-        # Шаг 1: Найти активный канал для инициатора (A) и получить номер клиента (B)
-        logger.debug(f"Looking for active channel for initiator {internal_number} and finding client number")
+        # Шаг 1: Найти активный канал для инициатора (A) и получить BridgeId
+        logger.debug(f"Looking for active channel for initiator {internal_number} and finding BridgeId")
 
         active_channel_a = None
-        client_number = None
-        client_channel = None
-
-        # Получаем список активных каналов
+        bridge_id = None
+        
+        # Список активных каналов
         channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-        logger.debug(f"Active channels {channels_response.splitlines()}")
-        # Находим канал инициатора (A) и его connected client (B) или партнера по звонку
+        
+        # Ищем канал инициатора (A)
         for line in channels_response.splitlines():
-            # Ищем канал инициатора (A), который может быть в виде Local/ или SIP/
-            if f"CallerIDNum: {internal_number}" in line:
+            if f"CallerIDNum: {internal_number}" in line:  # Канал инициатора (A)
                 for chan_line in channels_response.splitlines():
                     if "Channel: " in chan_line:
                         active_channel_a = chan_line.split(':', 1)[1].strip()  # Сохраняем канал A
-
-                    if "ConnectedLineNum:" in line and "<unknown>" not in line:  # Номер клиента (клиент B)
-                        client_number = line.split(':', 1)[1].strip()
-
-                        logger.debug(f"Found client number: {client_number}")
                         break
 
-        # Если канал инициатора не найден, завершить выполнение с ошибкой
         if not active_channel_a:
             logger.error(f"No active call found for initiator {internal_number}")
-            raise ValueError(f"No active call found for number {internal_number}")
+            raise ValueError(f"No active call found for initiator {internal_number}")
 
-        # Если клиент (B) не найден, завершить выполнение с ошибкой
-        if not client_number:
-            logger.error(f"No connected client found for initiator {internal_number}")
-            raise ValueError(f"No connected client found for number {internal_number}")
+        logger.debug(f"Active channel found for initiator {internal_number}: {active_channel_a}")
 
-        # Найти канал клиента (B) по его номеру
-        for line in channels_response.splitlines():
-            if f"CallerIDNum: {client_number}" in line:
-                for chan_line in channels_response.splitlines():
-                    if "Channel: " in chan_line:
-                        client_channel = chan_line.split(':', 1)[1].strip()
-                        break
+        # Шаг 2: Найти мост (Bridge), где находится активный канал инициатора (A)
+        logger.debug(f"Finding bridge containing the initiator's channel {active_channel_a}")
 
-        # Если канал клиента не найден, завершить выполнение с ошибкой
-        if not client_channel:
-            logger.error(f"No active call found for client {client_number}")
-            raise ValueError(f"No active call found for client {client_number}")
+        # Получаем список всех бри́джей
+        bridges_response = send_ami_command('Action: BridgeList\r\n\r\n')
 
-        logger.debug(f"Active channels found - A: {active_channel_a}, B (client): {client_channel}")
+        # Идем по каждому бри́джу и проверяем, содержится ли в нем канал A
+        for line in bridges_response.splitlines():
+            if "BridgeUniqueid: " in line:  # Идентификатор текущего бриджа
+                current_bridge_id = line.split(":")[1].strip()
 
-        # Шаг 2: Объединяем каналы A и B с использованием команды `Bridge`
-        logger.debug(f"Bridging channels {active_channel_a} (A) and {client_channel} (B - client)")
+                # Вызов BridgeInfo для получения полной информации о каналах в бри́дже
+                bridge_info_response = send_ami_command(f'Action: BridgeInfo\r\nBridgeUniqueid: {current_bridge_id}\r\n\r\n')
 
-        bridge_command = (
-            f'Action: Bridge\r\n'
-            f'Channel1: {active_channel_a}\r\n'
-            f'Channel2: {client_channel}\r\n'
-            f'\r\n'
-        )
+                # Проверяем, что инициатор (A) есть в этом бри́дже
+                if active_channel_a in bridge_info_response:
+                    bridge_id = current_bridge_id
+                    break  # Мы нашли нужный брижд с нужным каналом
 
-        bridge_response = send_ami_command(bridge_command)
-
-        if 'Response: Success' not in bridge_response:
-            logger.error(f'Failed to bridge channels A and B: {bridge_response}')
-            raise ValueError(f"Failed to bridge initiator and client channels")
-
-        logger.debug(f"Channels A and B successfully bridged")
-
-        # Шаг 3: Найти созданный мост (Bridge) через `BridgeList` для получения BridgeUniqueid
-        logger.debug(f"Listing bridges to find the one containing channels {active_channel_a} and {client_channel}")
-
-        bridge_list_response = send_ami_command('Action: BridgeList\r\n\r\n')
-        bridge_id = None
-
-        # Проверяем список бри́джей для нахождения нашего (с существующими каналами A и B)
-        for line in bridge_list_response.splitlines():
-            if f"Channel: {active_channel_a}" in line or f"Channel: {client_channel}" in line:
-                for bridge_line in bridge_list_response.splitlines():
-                    if "BridgeUniqueid: " in bridge_line:
-                        bridge_id = bridge_line.split(":")[1].strip()
-                        break
-            if bridge_id:
-                break
-
-        # Если активный мост не найден, выдать ошибку
+        # Если мост не найден, завершаем с ошибкой
         if not bridge_id:
-            logger.error(f"Bridge not found after bridging channels A and B.")
-            raise ValueError("Bridge ID retrieval failed after bridging A and B")
+            logger.error(f"No bridge found containing the channel for {internal_number}")
+            raise ValueError(f"No bridge found for initiator's channel {active_channel_a}")
 
         logger.debug(f"Bridge found with ID: {bridge_id}")
 
-        # Шаг 4: Инициируем звонок на абонента С
+        # Шаг 3: Инициируем звонок на абонента С
         logger.debug(f'Initiating call to {transfer_to_number} through trunk {("kazakhtelecom-out" if is_mobile else "from-internal")}')
 
         originate_command = (
@@ -211,58 +175,58 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
 
         target_channel = None
         start_time = time.time()
-        TIMEOUT = 120  # Задаем тайм-аут в 120 секунд
 
-        while not target_channel:
-            elapsed_time = time.time() - start_time
-            if elapsed_time > TIMEOUT:
-                logger.error(f"Timed out waiting for target {transfer_to_number} to answer.")
-                raise TimeoutError(f"Target {transfer_to_number} did not answer within {TIMEOUT} seconds.")
-
-            # Находим канал абонента C
+        while not target_channel and (time.time() - start_time) < TIMEOUT:
             channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
             for line in channels_response.splitlines():
-                if f"CallerIDNum: {transfer_to_number}" in line:
+                if f"CallerIDNum: {transfer_to_number}" in line:  # Найти канал для абонента C
                     for chan_line in channels_response.splitlines():
                         if "Channel: " in chan_line:
-                            target_channel = chan_line.split(':', 1)[1].strip()  # Извлекаем канал C
+                            target_channel = chan_line.split(':', 1)[1].strip()
                             break
 
             if target_channel:
-                # Проверить статус канала (Up или нет)
-                channel_status_response = send_ami_command(f'Action: Status\r\nChannel: {target_channel}\r\n\r\n')
+                # Проверить статус канала после анализа ответа
+                channel_status = send_ami_command(f'Action: Status\r\nChannel: {target_channel}\r\n\r\n')
                 channel_up = False
-                for line in channel_status_response.splitlines():
-                    if "ChannelStateDesc: Up" in line:
+                for line in channel_status.splitlines():
+                    if "ChannelStateDesc: Up" in line:  # "Up" означает, что звонок принят
                         channel_up = True
                         break
 
                 if channel_up:
                     logger.debug(f"Target channel {target_channel} is 'Up'")
                 else:
-                    logger.debug(f"Target channel {target_channel} not 'Up' yet. Rechecking...")
-                    target_channel = None  # Сбрасываем канал если статус пока не Up
-            
+                    logger.debug(f"Target channel {target_channel} not ready ('Up'). Retrying...")
+                    target_channel = None
+
             if not target_channel:
-                time.sleep(1)
+                time.sleep(0.5)
 
-        # Шаг 5: Добавляем канал абонента C в бри́дж
-        logger.debug(f"Adding target channel {target_channel} to the bridge {bridge_id}")
+        # Если время ожидания истекло
+        if not target_channel:
+            logger.error(f"Timed out waiting for target {transfer_to_number} to answer")
+            raise TimeoutError(f"Target {transfer_to_number} did not answer within {TIMEOUT} seconds")
 
-        bridge_add_channel_command = (
+        # Шаг 4: Добавляем канал абонента C в существующий бри́дж
+        logger.debug(f"Adding channel {target_channel} to the bridge {bridge_id}")
+
+        bridge_add_command = (
             f'Action: BridgeAddChannel\r\n'
             f'BridgeUniqueid: {bridge_id}\r\n'
             f'Channel: {target_channel}\r\n'
             f'\r\n'
         )
-        add_c_response = send_ami_command(bridge_add_channel_command)
 
-        if 'Response: Success' not in add_c_response:
-            logger.error(f'Failed to add target C to bridge: {add_c_response}')
-            raise ValueError(f"Failed to add target channel to bridge")
+        bridge_add_response = send_ami_command(bridge_add_command)
 
-        logger.debug(f"Channel {target_channel} successfully added to bridge {bridge_id}")
-        return {'status': 'success', 'message': f"Channel {target_channel} added to the bridge {bridge_id}"}
+        if 'Response: Success' not in bridge_add_response:
+            logger.error(f'Failed to add target C to bridge: {bridge_add_response}')
+            raise ValueError(f"Failed to add channel {target_channel} to bridge {bridge_id}")
+
+        logger.debug(f"Channel {target_channel} added to bridge {bridge_id} successfully")
+
+        return {'status': 'success', 'message': f"Channel {target_channel} added to bridge {bridge_id}"}
 
     except TimeoutError as te:
         logger.error(str(te))
@@ -279,6 +243,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
         )
         raise e
+
 
 # Маршрут для запуска задачи attended_transfer
 @app.route('/api/attended_transfer', methods=['POST'])
