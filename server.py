@@ -153,15 +153,16 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         logger.debug(f'Initiating call to {transfer_to_number} through trunk {("kazakhtelecom-out" if is_mobile else "from-internal")}')
 
         originate_command = (
-            f'Action: Originate\r\n'
-            f'Channel: SIP/kazakhtelecom-out/{transfer_to_number}\r\n'  # Вызов на целевой номер C
-            f'Context: from-internal\r\n'
-            f'Exten: s\r\n'
-            f'Priority: 1\r\n'
-            f'CallerID: {internal_number}\r\n'
-            f'Async: true\r\n'
-            f'\r\n'
-        )
+        f'Action: Originate\r\n'
+        f'Channel: SIP/kazakhtelecom-out/{transfer_to_number}\r\n'  # Вызов на целевой номер C
+        f'Context: from-internal\r\n'
+        f'Exten: {transfer_to_number}\r\n'  
+        f'Priority: 1\r\n'
+        f'CallerID: {internal_number}\r\n'
+        f'Async: true\r\n'
+        f'\r\n'
+)
+
 
         originate_response = send_ami_command(originate_command)
         logger.debug(f"Originate response for target: {originate_response}")
