@@ -75,11 +75,14 @@ def send_ami_command(command):
 
         # Теперь читаем ответ на команду ПОСТОЯННО, пока не получим EventList: Complete
         full_response = ''
+        shirtreq = True
         while True:
             chunk = sock.recv(1024).decode()
+            if "will follow" in chunk:
+                shirtreq = False
             full_response += chunk
             
-            if 'EventList: Complete' in chunk:  # Завершение списка событий
+            if 'EventList: Complete' in chunk or shirtreq:  # Завершение списка событий
                 break
 
         return full_response
@@ -155,10 +158,10 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         originate_command = (
         f'Action: Originate\r\n'
         f'Channel: SIP/kazakhtelecom-out/{transfer_to_number}\r\n'  # Вызов на целевой номер C
-        # f'Context: from-internal\r\n'
-        # f'Exten: {transfer_to_number}\r\n'  
+        f'Context: from-internal\r\n'
+        f'Exten: 1001\r\n'  
         f'Priority: 1\r\n'
-        f'CallerID: {internal_number}\r\n'
+        f'CallerID: {transfer_to_number}\r\n'
         f'Async: true\r\n'
         f'\r\n'
 )
