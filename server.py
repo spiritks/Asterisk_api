@@ -97,153 +97,66 @@ def send_ami_command(command):
 # import logging
 
 # logger = logging.getLogger(__name__)
+def find_active_channel(internal_number):
+    channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+    active_channel = None
+    for line in channels_response.splitlines():
+        if f"CallerIDNum: {internal_number}" in line:  # Ищем канал по CallerID инициатора
+            for chan_line in channels_response.splitlines():
+                if "Channel: " in chan_line:
+                    active_channel = chan_line.split(':', 1)[1].strip()  # Извлекаем Channel
+                    logger.debug(f"Found active channel for {internal_number}: {active_channel}")
+                    return active_channel
+    return None
 
-TIMEOUT = 60  # Тайм-аут для ожидания
+def atxfer_call(active_channel, transfer_to_number, target_context):
+    if len(transfer_to_number)>3:
+        transfer_to_number="8"+transfer_to_number
+    atxfer_command = (
+        f'Action: Atxfer\r\n'
+        f'Channel: {active_channel}\r\n'        # Канал инициатора
+        f'Exten: {transfer_to_number}\r\n'      # Целевой номер (номер абонента C)
+        f'Context: {target_context}\r\n'        # Контекст для перевода звонка
+        f'\r\n'
+    )
+
+    logger.debug(f"Sending Atxfer command to transfer call to {transfer_to_number}")
+    atxfer_response = send_ami_command(atxfer_command)
+    logger.debug(f"Atxfer response: {atxfer_response}")
+
+    if 'Response: Success' not in atxfer_response:
+        logger.error(f"Failed to transfer call: {atxfer_response}")
+        raise ValueError("Atxfer command failed")
+    
+    logger.debug(f"Call successfully transferred to {transfer_to_number}")
+    return {'status': 'success', 'message': f"Call transferred to {transfer_to_number}"}
 
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
-        # Шаг 1: Найти активный канал для инициатора (A) и получить BridgeId
-        logger.debug(f"Looking for active channel for initiator {internal_number} and finding BridgeId")
-
-        active_channel_a = None
-        bridge_id = None
+        # 1. Найти активный канал для инициатора (A)
+        logger.debug(f"Finding active channel for initiator {internal_number}")
         
-        # Список активных каналов
-        channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-        
-        # Ищем канал инициатора (A)
-        for line in channels_response.splitlines():
-            if f"CallerIDNum: {internal_number}" in line:  # Канал инициатора (A)
-                for chan_line in channels_response.splitlines():
-                    if "Channel: " in chan_line:
-                        active_channel_a = chan_line.split(':', 1)[1].strip()  # Сохраняем канал A
-                        break
-
-        if not active_channel_a:
-            logger.error(f"No active call found for initiator {internal_number}")
+        active_channel = find_active_channel(internal_number)
+        if not active_channel:
+            logger.error(f"No active call found for number {internal_number}. Aborting transfer.")
             raise ValueError(f"No active call found for initiator {internal_number}")
 
-        logger.debug(f"Active channel found for initiator {internal_number}: {active_channel_a}")
+        # 2. Генерируем целевой контекст (например, для отработки перевода)
+        target_context = 'from-internal'  # Это нужно изменить в зависимости от логики вашего диалплана
+        logger.debug(f"Performing transfer for {internal_number} to {transfer_to_number} in {target_context}")
 
-        # Шаг 2: Найти мост (Bridge), где находится активный канал инициатора (A)
-        logger.debug(f"Finding bridge containing the initiator's channel {active_channel_a}")
+        # 3. Выполняем перевод вызова с использованием Atxfer
+        return atxfer_call(active_channel, transfer_to_number, target_context)
 
-        # Получаем список всех бри́джей
-        bridges_response = send_ami_command('Action: BridgeList\r\n\r\n')
-
-        # Идем по каждому бри́джу и проверяем, содержится ли в нем канал A
-        for line in bridges_response.splitlines():
-            if "BridgeUniqueid: " in line:  # Идентификатор текущего бриджа
-                current_bridge_id = line.split(":")[1].strip()
-
-                # Вызов BridgeInfo для получения полной информации о каналах в бри́дже
-                bridge_info_response = send_ami_command(f'Action: BridgeInfo\r\nBridgeUniqueid: {current_bridge_id}\r\n\r\n')
-
-                # Проверяем, что инициатор (A) есть в этом бри́дже
-                if active_channel_a in bridge_info_response:
-                    bridge_id = current_bridge_id
-                    break  # Мы нашли нужный брижд с нужным каналом
-
-        # Если мост не найден, завершаем с ошибкой
-        if not bridge_id:
-            logger.error(f"No bridge found containing the channel for {internal_number}")
-            raise ValueError(f"No bridge found for initiator's channel {active_channel_a}")
-
-        logger.debug(f"Bridge found with ID: {bridge_id}")
-
-        # Шаг 3: Инициируем звонок на абонента С
-        logger.debug(f'Initiating call to {transfer_to_number} through trunk {("kazakhtelecom-out" if is_mobile else "from-internal")}')
-
-        originate_command = (
-        f'Action: Originate\r\n'
-        f'Channel: SIP/kazakhtelecom-out/{transfer_to_number}\r\n'  # Вызов на целевой номер C
-        f'Context: from-internal\r\n'
-        f'Exten: 1001\r\n'  
-        f'Priority: 1\r\n'
-        f'CallerID: {transfer_to_number}\r\n'
-        f'Async: true\r\n'
-        f'\r\n'
-)
-
-
-        originate_response = send_ami_command(originate_command)
-        logger.debug(f"Originate response for target: {originate_response}")
-
-        if 'Response: Success' not in originate_response:
-            logger.error(f"Failed to initiate call for target: {originate_response}")
-            raise ValueError("Failed to originate call for target (C)")
-
-        # Ждем пока абонент C не ответит
-        logger.debug(f"Waiting for target ({transfer_to_number}) to answer")
-
-        target_channel = None
-        start_time = time.time()
-
-        while not target_channel and (time.time() - start_time) < TIMEOUT:
-            channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-            for line in channels_response.splitlines():
-                if f"CallerIDNum: {transfer_to_number}" in line:  # Найти канал для абонента C
-                    for chan_line in channels_response.splitlines():
-                        if "Channel: " in chan_line:
-                            target_channel = chan_line.split(':', 1)[1].strip()
-                            break
-
-            if target_channel:
-                # Проверить статус канала после анализа ответа
-                channel_status = send_ami_command(f'Action: Status\r\nChannel: {target_channel}\r\n\r\n')
-                channel_up = False
-                for line in channel_status.splitlines():
-                    if "ChannelStateDesc: Up" in line:  # "Up" означает, что звонок принят
-                        channel_up = True
-                        break
-
-                if channel_up:
-                    logger.debug(f"Target channel {target_channel} is 'Up'")
-                else:
-                    logger.debug(f"Target channel {target_channel} not ready ('Up'). Retrying...")
-                    target_channel = None
-
-            if not target_channel:
-                time.sleep(0.5)
-
-        # Если время ожидания истекло
-        if not target_channel:
-            logger.error(f"Timed out waiting for target {transfer_to_number} to answer")
-            raise TimeoutError(f"Target {transfer_to_number} did not answer within {TIMEOUT} seconds")
-
-        # Шаг 4: Добавляем канал абонента C в существующий бри́дж
-        logger.debug(f"Adding channel {target_channel} to the bridge {bridge_id}")
-
-        bridge_add_command = (
-            f'Action: BridgeAddChannel\r\n'
-            f'BridgeUniqueid: {bridge_id}\r\n'
-            f'Channel: {target_channel}\r\n'
-            f'\r\n'
-        )
-
-        bridge_add_response = send_ami_command(bridge_add_command)
-
-        if 'Response: Success' not in bridge_add_response:
-            logger.error(f'Failed to add target C to bridge: {bridge_add_response}')
-            raise ValueError(f"Failed to add channel {target_channel} to bridge {bridge_id}")
-
-        logger.debug(f"Channel {target_channel} added to bridge {bridge_id} successfully")
-
-        return {'status': 'success', 'message': f"Channel {target_channel} added to bridge {bridge_id}"}
-
-    except TimeoutError as te:
-        logger.error(str(te))
-        self.update_state(state='FAILURE', meta={'exc_type': 'TimeoutError', 'exc_message': str(te)})
-        raise te
     except ValueError as e:
-        logger.error(f"Error in attended transfer for {internal_number} -> {transfer_to_number}: {str(e)}")
+        logger.error(f"Error during attended transfer: {str(e)}")
         self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
         raise e
     except Exception as e:
-        logger.error(f"General error in attended transfer task: {str(e)}")
+        logger.error(f"General error during attended transfer: {str(e)}")
         self.update_state(
-            state='FAILURE',
+            state='FAILURE', 
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
         )
         raise e
