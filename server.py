@@ -109,9 +109,8 @@ def find_active_channel(internal_number):
                     return active_channel
     return None
 
+# Функция для отправки команды Atxfer
 def atxfer_call(active_channel, transfer_to_number, target_context):
-    if len(transfer_to_number)>3:
-        transfer_to_number="8"+transfer_to_number
     atxfer_command = (
         f'Action: Atxfer\r\n'
         f'Channel: {active_channel}\r\n'        # Канал инициатора
@@ -131,30 +130,67 @@ def atxfer_call(active_channel, transfer_to_number, target_context):
     logger.debug(f"Call successfully transferred to {transfer_to_number}")
     return {'status': 'success', 'message': f"Call transferred to {transfer_to_number}"}
 
+
+# AMI Listener для отслеживания событий
+def listen_for_ami_events():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect(('127.0.0.1', 5038))  # Подключение к AMI на порту 5038
+     # Логинимся
+    login_command = (
+            f'Action: Login\r\n'
+            f'Username: {AMI_USER}\r\n'
+            f'Secret: {AMI_PASSWORD}\r\n'
+            f'Events: off\r\n\r\n')
+    sock.sendall(login_command.encode())
+
+    # Функция для получения данных от AMI
+    def receive_ami_events():
+        buffer = ''
+        while True:
+            data = sock.recv(1024).decode()
+            buffer += data
+            if '\r\n\r\n' in data:
+                logger.debug(f"AMI event: {buffer}")
+                handle_ami_event(buffer)  # Обработка события
+                buffer = ''
+
+    # Реализация обработки полученных событий
+    def handle_ami_event(event_data):
+        if 'Event: Transfer' in event_data:
+            logger.info(f"Transfer event detected: {event_data}")
+        if 'Event: BridgeEnter' in event_data:
+            logger.info(f"Channel entered bridge: {event_data}")
+        if 'Event: BridgeLeave' in event_data:
+            logger.info(f"Channel left bridge: {event_data}")
+        if 'Event: Hangup' in event_data:
+            logger.info(f"Call hangup detected: {event_data}")
+
+    receive_ami_events()
+
+
+# Пример функции перевода вызова с отслеживанием статуса
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
-        # 1. Найти активный канал для инициатора (A)
-        logger.debug(f"Finding active channel for initiator {internal_number}")
-        
+        # 1. Найти активный канал инициатора через CoreShowChannels
         active_channel = find_active_channel(internal_number)
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}. Aborting transfer.")
             raise ValueError(f"No active call found for initiator {internal_number}")
 
-        # 2. Генерируем целевой контекст (например, для отработки перевода)
-        target_context = 'from-internal'  # Это нужно изменить в зависимости от логики вашего диалплана
-        logger.debug(f"Performing transfer for {internal_number} to {transfer_to_number} in {target_context}")
+        # 2. Инициализация перевода via Atxfer
+        target_context = 'from-internal'  # Контекст для диалинга
+        transfer_status = atxfer_call(active_channel, transfer_to_number, target_context)
 
-        # 3. Выполняем перевод вызова с использованием Atxfer
-        return atxfer_call(active_channel, transfer_to_number, target_context)
+        # Слушаем события AMI после выполнения Atxfer
+        listen_for_ami_events()
 
     except ValueError as e:
         logger.error(f"Error during attended transfer: {str(e)}")
         self.update_state(state='FAILURE', meta={'exc_type': type(e).__name__, 'exc_message': str(e)})
         raise e
     except Exception as e:
-        logger.error(f"General error during attended transfer: {str(e)}")
+        logger.error(f"General error during attended transfer task: {str(e)}")
         self.update_state(
             state='FAILURE', 
             meta={'exc_type': type(e).__name__, 'exc_message': str(e)},
