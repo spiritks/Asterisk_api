@@ -97,17 +97,33 @@ def send_ami_command(command):
 # import logging
 
 # logger = logging.getLogger(__name__)
-def find_active_channel(internal_number):
+def find_active_channels(internal_number):
+    """Функция для нахождения каналов инициатора и клиента (A и B)."""
     channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
     active_channel = None
+    client_channel = None
+
+    # Ищем канал инициатора (A) и его собеседника (B)
     for line in channels_response.splitlines():
-        if f"CallerIDNum: {internal_number}" in line:  # Ищем канал по CallerID инициатора
+        if f"CallerIDNum: {internal_number}" in line:
             for chan_line in channels_response.splitlines():
                 if "Channel: " in chan_line:
-                    active_channel = chan_line.split(':', 1)[1].strip()  # Извлекаем Channel
-                    logger.debug(f"Found active channel for {internal_number}: {active_channel}")
-                    return active_channel
-    return None
+                    # Найден канал инициатора (A)
+                    active_channel = chan_line.split(':', 1)[1].strip()
+
+                # Найдем канал текущего клиента (B), с которым инициатор разговаривает
+                if "ConnectedLineNum: " in line:  # Номер "клиента" (B)
+                    connected_client = line.split(':', 1)[1].strip()
+                    
+                    # Найдем соответствующий канал клиента (B)
+                    for chan_line in channels_response.splitlines():
+                        if f"CallerIDNum: {connected_client}" in chan_line:
+                            if "Channel: " in chan_line:
+                                client_channel = chan_line.split(':', 1)[1].strip()
+                                break
+
+    return client_channel
+
 
 # Функция для отправки команды Atxfer
 def atxfer_call(active_channel, transfer_to_number, target_context):
@@ -173,7 +189,7 @@ def listen_for_ami_events():
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
         # 1. Найти активный канал инициатора через CoreShowChannels
-        active_channel = find_active_channel(internal_number)
+        active_channel = find_active_channels (internal_number)
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}. Aborting transfer.")
             raise ValueError(f"No active call found for initiator {internal_number}")
