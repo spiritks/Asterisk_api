@@ -192,7 +192,7 @@ def listen_for_ami_events():
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
         # 1. Найти активный канал инициатора через CoreShowChannels
-        active_channel = find_active_channels (internal_number)
+        active_channel,client_chanel = find_active_channels (internal_number)
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}. Aborting transfer.")
             raise ValueError(f"No active call found for initiator {internal_number}")
@@ -200,7 +200,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         # 2. Инициализация перевода via Atxfer
         target_context = 'from-internal'  # Контекст для диалинга
         transfer_status = atxfer_call(active_channel, transfer_to_number, target_context)
-
+        logger.debug(f"Transfer status: {transfer_status}")
         # Слушаем события AMI после выполнения Atxfer
         listen_for_ami_events()
 
