@@ -105,15 +105,16 @@ def find_active_channels(internal_number):
 
     # Ищем канал инициатора (A) и его собеседника (B)
     logger.debug(f"# Ищем канал инициатора (A) и его собеседника (B)")
-    logger.debug(channels_response.splitlines())
+    
     for line in channels_response.splitlines():
+        logger.debug(line)
         if f"CallerIDNum: {internal_number}" in line:
             for chan_line in channels_response.splitlines():
                 if "Channel: " in chan_line:
                     # Найден канал инициатора (A)
-    
-                    active_channel = chan_line.split(':', 1)[1].strip()
 
+                    active_channel = chan_line.split(':', 1)[1].strip()
+                    
                 # Найдем канал текущего клиента (B), с которым инициатор разговаривает
                 if "ConnectedLineNum: " in line:  # Номер "клиента" (B)
                     connected_client = line.split(':', 1)[1].strip()
@@ -191,6 +192,8 @@ def listen_for_ami_events():
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
     try:
+        if is_mobile:
+            transfer_to_number = f"8{transfer_to_number}"
         # 1. Найти активный канал инициатора через CoreShowChannels
         active_channel,client_chanel = find_active_channels (internal_number)
         if not active_channel:
@@ -224,6 +227,8 @@ def attended_transfer():
     internal_number = data.get('internal_number')
     transfer_to_number = data.get('transfer_to_number')
     is_mobile = data.get('is_mobile', True)
+    if len(transfer_to_number)>3:
+        is_mobile=True
 
     logger.debug(f"Attended transfer request from {internal_number} to {transfer_to_number}")
 
