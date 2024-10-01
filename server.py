@@ -111,6 +111,7 @@ def find_active_channels(internal_number):
             for chan_line in channels_response.splitlines():
                 if "Channel: " in chan_line:
                     # Найден канал инициатора (A)
+    
                     active_channel = chan_line.split(':', 1)[1].strip()
 
                 # Найдем канал текущего клиента (B), с которым инициатор разговаривает
@@ -123,7 +124,7 @@ def find_active_channels(internal_number):
                             if "Channel: " in chan_line:
                                 client_channel = chan_line.split(':', 1)[1].strip()
                                 break
-
+    logger.debug(f"Найдены каналы {active_channel} и {client_channel}")
     return active_channel, client_channel
 
 
