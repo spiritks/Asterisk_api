@@ -97,35 +97,52 @@ def send_ami_command(command):
 # import logging
 
 # logger = logging.getLogger(__name__)
-def find_active_channel(internal_number):
-    """
-    Функция для нахождения корректного активного канала для инициатора A
-    """
-    channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
-    active_channel = None
-    logger.debug("# Ищем активный канал инициатора (A)")
+def parse_core_show_channels_response(response):
+    """Функция для обработки ответа от CoreShowChannels и сбора всех каналов в список."""
+    channels = []
+    channel_info = {}
     
-    for line in channels_response.splitlines():
-        logger.debug(line)  # Логируем каждую строку ответа для отладки
-        
-        # Проверка на CallerIDNum
-        if f"CallerIDNum: {internal_number}" in line:
-            current_channel = None
-            linked_id = None
-            bridge_id = None
-            
-            # Вечеринкуем в пределах текущего блока канала
-            for chan_line in channels_response.splitlines():
-                if "Channel: " in chan_line:
-                    current_channel = chan_line.split(':', 1)[1].strip()
-                if "Linkedid: " in chan_line:
-                    linked_id = chan_line.split(": ", 1)[1].strip()
-                if "BridgeId: " in chan_line:
-                    bridge_id = chan_line.split(": ", 1)[1].strip()
-                if "ChannelStateDesc: Up" in chan_line:  # Проверяем только те каналы, которые в состоянии "Up"
-                    logger.debug(f"Канал {current_channel} с CallerID {internal_number} активен и имеет статус 'Up'")
-                    active_channel = current_channel               
-                    break  # Как только находим активный канал, выходим из цикла проверки канала
+    # Разбираем ответ построчно
+    for line in response.splitlines():
+        if line.startswith('Event: CoreShowChannel'):
+            # Когда начинаем новый канал, возможно, нужно сохранить предыдущие данные
+            if channel_info:
+                channels.append(channel_info)
+            channel_info = {}  # Новый словарь для следующего канала
+
+        # Собираем данные для каждого канала
+        if "Channel: " in line:
+            channel_info['Channel'] = line.split(': ', 1)[1].strip()
+        if "CallerIDNum: " in line:
+            channel_info['CallerIDNum'] = line.split(': ', 1)[1].strip()
+        if "ChannelStateDesc: " in line:
+            channel_info['ChannelStateDesc'] = line.split(': ', 1)[1].strip()
+        if "Linkedid: " in line:
+            channel_info['Linkedid'] = line.split(': ', 1)[1].strip()
+        if "BridgeId: " in line:
+            channel_info['BridgeId'] = line.split(': ', 1)[1].strip()
+    
+    # Добавляем последний канал в список (если информация по нему есть)
+    if channel_info:
+        channels.append(channel_info)
+
+    return channels
+
+def find_active_channel(internal_number, channels):
+    """Функция для нахождения активного канала инициатора."""
+    active_channel = None
+
+    logger.debug(f"# Ищем активный канал инициатора (A) для CallerIDNum: {internal_number}")
+
+    # Поиск нужного канала из предварительно собранного списка
+    for channel_info in channels:
+        caller_id = channel_info.get('CallerIDNum')
+        channel_state = channel_info.get('ChannelStateDesc')
+        channel_id = channel_info.get('Channel')
+        if caller_id == internal_number and channel_state == "Up":
+            logger.debug(f"Канал {channel_id} с CallerID {internal_number} активен и имеет статус 'Up'")
+            active_channel = channel_id
+            break
 
     if active_channel:
         logger.debug(f"Найден активный канал инициатора: {active_channel}")
@@ -133,6 +150,7 @@ def find_active_channel(internal_number):
         logger.error(f"Не удалось найти активный канал инициатора {internal_number}")
 
     return active_channel
+
 # Функция для отправки команды Atxfer
 def atxfer_call(active_channel, transfer_to_number, target_context):
     atxfer_command = (
@@ -154,44 +172,6 @@ def atxfer_call(active_channel, transfer_to_number, target_context):
     logger.debug(f"Call successfully transferred to {transfer_to_number}")
     return {'status': 'success', 'message': f"Call transferred to {transfer_to_number}"}
 
-
-# AMI Listener для отслеживания событий
-def listen_for_ami_events():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect(('127.0.0.1', 5038))  # Подключение к AMI на порту 5038
-     # Логинимся
-    login_command = (
-            f'Action: Login\r\n'
-            f'Username: {AMI_USER}\r\n'
-            f'Secret: {AMI_PASSWORD}\r\n'
-            f'Events: off\r\n\r\n')
-    sock.sendall(login_command.encode())
-
-    # Функция для получения данных от AMI
-    def receive_ami_events():
-        buffer = ''
-        while True:
-            data = sock.recv(1024).decode()
-            buffer += data
-            if '\r\n\r\n' in data:
-                logger.debug(f"AMI event: {buffer}")
-                handle_ami_event(buffer)  # Обработка события
-                buffer = ''
-
-    # Реализация обработки полученных событий
-    def handle_ami_event(event_data):
-        if 'Event: Transfer' in event_data:
-            logger.info(f"Transfer event detected: {event_data}")
-        if 'Event: BridgeEnter' in event_data:
-            logger.info(f"Channel entered bridge: {event_data}")
-        if 'Event: BridgeLeave' in event_data:
-            logger.info(f"Channel left bridge: {event_data}")
-        if 'Event: Hangup' in event_data:
-            logger.info(f"Call hangup detected: {event_data}")
-
-    receive_ami_events()
-
-
 # Пример функции перевода вызова с отслеживанием статуса
 @celery.task(bind=True, name='app.attended_transfer_task')
 def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile):
@@ -208,8 +188,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         target_context = 'from-internal'  # Контекст для диалинга
         transfer_status = atxfer_call(active_channel, transfer_to_number, target_context)
         logger.debug(f"Transfer status: {transfer_status}")
-        # Слушаем события AMI после выполнения Atxfer
-        # listen_for_ami_events()
+        
 
     except ValueError as e:
         logger.error(f"Error during attended transfer: {str(e)}")
