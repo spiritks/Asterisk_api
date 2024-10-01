@@ -97,38 +97,42 @@ def send_ami_command(command):
 # import logging
 
 # logger = logging.getLogger(__name__)
-def find_active_channels(internal_number):
-    """Функция для нахождения каналов инициатора и клиента (A и B)."""
+def find_active_channel(internal_number):
+    """
+    Функция для нахождения корректного активного канала для инициатора A
+    """
     channels_response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
     active_channel = None
-    client_channel = None
-
-    # Ищем канал инициатора (A) и его собеседника (B)
-    logger.debug(f"# Ищем канал инициатора (A) и его собеседника (B)")
+    logger.debug("# Ищем активный канал инициатора (A)")
     
     for line in channels_response.splitlines():
-        logger.debug(line)
+        logger.debug(line)  # Логируем каждую строку ответа для отладки
+        
+        # Проверка на CallerIDNum
         if f"CallerIDNum: {internal_number}" in line:
+            current_channel = None
+            linked_id = None
+            bridge_id = None
+            
+            # Вечеринкуем в пределах текущего блока канала
             for chan_line in channels_response.splitlines():
                 if "Channel: " in chan_line:
-                    # Найден канал инициатора (A)
+                    current_channel = chan_line.split(':', 1)[1].strip()
+                if "Linkedid: " in chan_line:
+                    linked_id = chan_line.split(": ", 1)[1].strip()
+                if "BridgeId: " in chan_line:
+                    bridge_id = chan_line.split(": ", 1)[1].strip()
+                if "ChannelStateDesc: Up" in chan_line:  # Проверяем только те каналы, которые в состоянии "Up"
+                    logger.debug(f"Канал {current_channel} с CallerID {internal_number} активен и имеет статус 'Up'")
+                    active_channel = current_channel               
+                    break  # Как только находим активный канал, выходим из цикла проверки канала
 
-                    active_channel = chan_line.split(':', 1)[1].strip()
-                    
-                # Найдем канал текущего клиента (B), с которым инициатор разговаривает
-                if "ConnectedLineNum: " in line:  # Номер "клиента" (B)
-                    connected_client = line.split(':', 1)[1].strip()
-                    
-                    # Найдем соответствующий канал клиента (B)
-                    for chan_line in channels_response.splitlines():
-                        if f"CallerIDNum: {connected_client}" in chan_line:
-                            if "Channel: " in chan_line:
-                                client_channel = chan_line.split(':', 1)[1].strip()
-                                break
-    logger.debug(f"Найдены каналы {active_channel} и {client_channel}")
-    return active_channel, client_channel
+    if active_channel:
+        logger.debug(f"Найден активный канал инициатора: {active_channel}")
+    else:
+        logger.error(f"Не удалось найти активный канал инициатора {internal_number}")
 
-
+    return active_channel
 # Функция для отправки команды Atxfer
 def atxfer_call(active_channel, transfer_to_number, target_context):
     atxfer_command = (
@@ -195,7 +199,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         if is_mobile:
             transfer_to_number = f"8{transfer_to_number}"
         # 1. Найти активный канал инициатора через CoreShowChannels
-        active_channel,client_chanel = find_active_channels (internal_number)
+        active_channel = find_active_channel (internal_number)
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}. Aborting transfer.")
             raise ValueError(f"No active call found for initiator {internal_number}")
