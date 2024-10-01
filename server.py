@@ -179,7 +179,17 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         if is_mobile:
             transfer_to_number = f"8{transfer_to_number}"
         # 1. Найти активный канал инициатора через CoreShowChannels
-        active_channel = find_active_channel (internal_number)
+        response = send_ami_command('Action: CoreShowChannels\r\n\r\n')
+
+        if not response:
+            raise ValueError(f"Failed to retrieve active channels from AMI")
+
+        # Парсим ответ, чтобы получить все каналы
+        channels = parse_core_show_channels_response(response)
+
+        # Ищем активный канал инициатора
+        active_channel = find_active_channel(internal_number, channels)
+
         if not active_channel:
             logger.error(f"No active call found for number {internal_number}. Aborting transfer.")
             raise ValueError(f"No active call found for initiator {internal_number}")
