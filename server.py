@@ -205,7 +205,7 @@ def attended_transfer_task(self, internal_number, transfer_to_number, is_mobile)
         transfer_status = atxfer_call(active_channel, transfer_to_number, target_context)
         logger.debug(f"Transfer status: {transfer_status}")
         # Слушаем события AMI после выполнения Atxfer
-        listen_for_ami_events()
+        # listen_for_ami_events()
 
     except ValueError as e:
         logger.error(f"Error during attended transfer: {str(e)}")
