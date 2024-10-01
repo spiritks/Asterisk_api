@@ -104,6 +104,8 @@ def find_active_channels(internal_number):
     client_channel = None
 
     # Ищем канал инициатора (A) и его собеседника (B)
+    logger.debug(f"# Ищем канал инициатора (A) и его собеседника (B)")
+    logger.debug(channels_response.splitlines())
     for line in channels_response.splitlines():
         if f"CallerIDNum: {internal_number}" in line:
             for chan_line in channels_response.splitlines():
@@ -122,7 +124,7 @@ def find_active_channels(internal_number):
                                 client_channel = chan_line.split(':', 1)[1].strip()
                                 break
 
-    return client_channel
+    return active_channel, client_channel
 
 
 # Функция для отправки команды Atxfer
