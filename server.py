@@ -158,7 +158,6 @@ def atxfer_call(active_channel, transfer_to_number, target_context):
         f'Channel: {active_channel}\r\n'        # Канал инициатора
         f'Exten: {transfer_to_number}\r\n'      # Целевой номер (номер абонента C)
         f'Context: {target_context}\r\n'        # Контекст для перевода звонка
-        f'Timeout: 60000\r\n'  # 40 секунд ожидания ответа (в миллисекундах)
         f'\r\n'
     )
 
